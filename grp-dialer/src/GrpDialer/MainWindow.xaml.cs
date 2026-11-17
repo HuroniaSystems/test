@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Windows;
@@ -17,11 +18,12 @@ public partial class MainWindow : Window
     private readonly NumpadEnterHook _hook;
     private GrandstreamClient? _client;
 
-    private LineStatus _status = new(CallState.Unknown, "", "", 0);
-    private DateTime? _activeSince;
+    private LineStatus _status = LineStatus.Offline;
+    private DateTime? _busySince;
+    private DateTime _lastDialAt = DateTime.MinValue;
+    private string _lastNumber = "";
     private bool _polling;
     private bool _busy;          // a user command is in flight
-    private string _lastNumber = "";
 
     public MainWindow()
     {
@@ -58,7 +60,7 @@ public partial class MainWindow : Window
 
         _client?.Dispose();
         _client = _settings.IsConfigured
-            ? new GrandstreamClient(_settings.PhoneHost, _settings.UseHttps, _settings.Password, _settings.Account)
+            ? new GrandstreamClient(_settings.PhoneHost, _settings.UseHttps, _settings.Password)
             : null;
 
         if (_client is null)
@@ -86,7 +88,6 @@ public partial class MainWindow : Window
         {
             HostBox.Text = _settings.PhoneHost;
             PasswordBox.Password = _settings.Password;
-            AccountBox.Text = (_settings.Account + 1).ToString();
             HttpsCheck.IsChecked = _settings.UseHttps;
             GlobalKeyCheck.IsChecked = _settings.GlobalNumpadEnter;
             PopCheck.IsChecked = _settings.PopOnIncoming;
@@ -100,32 +101,21 @@ public partial class MainWindow : Window
         }
     }
 
-    private bool ReadSettingsForm(out string host, out int account)
+    private bool ReadHost(out string host)
     {
         host = HostBox.Text.Trim();
-        account = 0;
-        if (host.Length == 0)
-        {
-            SettingsMessage("Enter the phone's IP address.", error: true);
-            return false;
-        }
-        if (!int.TryParse(AccountBox.Text.Trim(), out var acct) || acct < 1 || acct > 16)
-        {
-            SettingsMessage("Account must be a number from 1 to 16.", error: true);
-            return false;
-        }
-        account = acct - 1;
-        return true;
+        if (host.Length > 0) return true;
+        SettingsMessage("Enter the phone's IP address.", error: true);
+        return false;
     }
 
     private void Save_Click(object sender, RoutedEventArgs e) => SaveSettings();
 
     private void SaveSettings()
     {
-        if (!ReadSettingsForm(out var host, out var account)) return;
+        if (!ReadHost(out var host)) return;
         _settings.PhoneHost = host;
         _settings.Password = PasswordBox.Password;
-        _settings.Account = account;
         _settings.UseHttps = HttpsCheck.IsChecked == true;
         _settings.GlobalNumpadEnter = GlobalKeyCheck.IsChecked == true;
         _settings.PopOnIncoming = PopCheck.IsChecked == true;
@@ -137,13 +127,13 @@ public partial class MainWindow : Window
 
     private async void Test_Click(object sender, RoutedEventArgs e)
     {
-        if (!ReadSettingsForm(out var host, out var account)) return;
+        if (!ReadHost(out var host)) return;
         SettingsMessage("Testing...", error: false);
-        using var test = new GrandstreamClient(host, HttpsCheck.IsChecked == true, PasswordBox.Password, account);
+        using var test = new GrandstreamClient(host, HttpsCheck.IsChecked == true, PasswordBox.Password);
         try
         {
             var s = await test.GetStatus();
-            SettingsMessage($"Connected. Line is {Describe(s.State).ToLowerInvariant()}.", error: false);
+            SettingsMessage($"Connected. Line state: {s.RawState}.", error: false);
         }
         catch (Exception ex)
         {
@@ -186,7 +176,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             SetConnection(false, Friendly(ex));
-            UpdateStatus(new LineStatus(CallState.Unknown, "", "", 0));
+            UpdateStatus(LineStatus.Offline);
         }
         finally
         {
@@ -197,23 +187,27 @@ public partial class MainWindow : Window
 
     private void UpdateStatus(LineStatus s)
     {
-        var prev = _status.State;
+        bool wasBusy = _status.Online && !_status.Idle;
+        bool isBusy = s.Online && !s.Idle;
         _status = s;
 
-        if (s.State == CallState.Active && prev != CallState.Active && prev != CallState.OnHold)
-            _activeSince = DateTime.Now;
-        if (s.State is CallState.Idle or CallState.Unknown or CallState.Incoming or CallState.Outgoing)
-            _activeSince = null;
-
-        if (s.State == CallState.Incoming && prev != CallState.Incoming)
+        if (isBusy && !wasBusy)
         {
-            if (_settings.PopOnIncoming) WindowFocus.ForceForeground(this);
-            else WindowFocus.Flash(this);
+            _busySince = DateTime.Now;
+            // A call that this app did not just place: someone is calling in, or the
+            // handset was lifted. Either way, put the controls in front of the user.
+            bool placedByUs = DateTime.Now - _lastDialAt < TimeSpan.FromSeconds(10);
+            if (!placedByUs)
+            {
+                if (_settings.PopOnIncoming) WindowFocus.ForceForeground(this);
+                else WindowFocus.Flash(this);
+            }
         }
-
-        // Once a call we placed ends, clear the dialer for the next one.
-        if (s.State == CallState.Idle && prev is CallState.Active or CallState.OnHold or CallState.Outgoing)
-            NumberBox.Clear();
+        if (!isBusy)
+        {
+            _busySince = null;
+            if (wasBusy && s.Online) NumberBox.Clear();
+        }
 
         Render();
     }
@@ -221,41 +215,31 @@ public partial class MainWindow : Window
     private void Render()
     {
         var s = _status;
-        StateText.Text = Describe(s.State);
-        var (fg, bg, border) = s.State switch
-        {
-            CallState.Incoming => ("Warn", "WarnBg", "Warn"),
-            CallState.Active => ("Success", "SuccessBg", "SuccessBorder"),
-            CallState.Outgoing => ("Info", "AccentBg", "Accent"),
-            CallState.OnHold => ("Warn", "WarnBg", "Warn"),
-            _ => ("TextDim", "BgUi", "Border"),
-        };
+        bool busy = s.Online && !s.Idle;
+
+        StateText.Text = !s.Online ? "Offline" : TitleCase(s.RawState);
+        var (fg, bg, border) = busy ? ("Success", "SuccessBg", "SuccessBorder") : ("TextDim", "BgUi", "Border");
         StateText.Foreground = (Brush)FindResource(fg);
         StateBadge.Background = (Brush)FindResource(bg);
         StateBadge.BorderBrush = (Brush)FindResource(border);
 
-        bool inCall = s.State is CallState.Active or CallState.OnHold or CallState.Outgoing or CallState.Incoming;
-        string number = s.RemoteNumber.Length > 0 ? s.RemoteNumber : (s.State == CallState.Outgoing ? _lastNumber : "");
-        RemoteName.Text = !inCall ? "No active call"
+        string number = s.RemoteNumber.Length > 0 ? s.RemoteNumber
+            : busy && DateTime.Now - _lastDialAt < TimeSpan.FromMinutes(5) ? _lastNumber : "";
+        RemoteName.Text = !busy ? "No active call"
             : s.RemoteName.Length > 0 ? s.RemoteName
             : number.Length > 0 ? number
-            : "Unknown caller";
-        RemoteNumber.Text = inCall && s.RemoteName.Length > 0 ? number : "";
+            : "In use";
+        RemoteNumber.Text = busy && s.RemoteName.Length > 0 ? number : "";
         RemoteNumber.Visibility = RemoteNumber.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        bool online = s.State != CallState.Unknown;
-        PrimaryBtn.Content = s.State == CallState.Incoming ? "Answer" : "Call";
-        PrimaryBtn.IsEnabled = online && !_busy &&
-            (s.State == CallState.Incoming || (s.State == CallState.Idle && Normalize(NumberBox.Text).Length > 0));
-        HangUpBtn.Content = s.State == CallState.Incoming ? "Decline" : "Hang up";
-        HangUpBtn.IsEnabled = online && !_busy && inCall;
+        PrimaryBtn.Content = busy ? "Answer" : "Call";
+        PrimaryBtn.IsEnabled = s.Online && !_busy && (busy || Normalize(NumberBox.Text).Length > 0);
+        HangUpBtn.IsEnabled = s.Online && !_busy && busy;
     }
 
     private void TickTimer()
     {
-        TimerText.Text = _activeSince is DateTime since
-            ? (DateTime.Now - since).ToString(@"m\:ss")
-            : "";
+        TimerText.Text = _busySince is DateTime since ? (DateTime.Now - since).ToString(@"m\:ss") : "";
     }
 
     private void SetConnection(bool? ok, string text)
@@ -264,44 +248,47 @@ public partial class MainWindow : Window
         ConnText.Text = text;
     }
 
-    private static string Describe(CallState s) => s switch
-    {
-        CallState.Idle => "Idle",
-        CallState.Incoming => "Incoming call",
-        CallState.Outgoing => "Calling",
-        CallState.Active => "Connected",
-        CallState.OnHold => "On hold",
-        _ => "Offline",
-    };
+    private static string TitleCase(string raw) =>
+        raw.Length == 0 ? "" : CultureInfo.CurrentCulture.TextInfo.ToTitleCase(raw.ToLowerInvariant());
 
     // ---------- Actions ----------
 
-    /// <summary>The single Enter action: answer, hang up, or call, by state.</summary>
-    private async Task EnterAction()
+    /// <summary>
+    /// Enter: idle -> call. In use -> acceptcall; the phone answers {"response":"error"}
+    /// when there is nothing to accept, in which case the call is ended instead.
+    /// </summary>
+    private Task EnterAction() =>
+        _status.Online && !_status.Idle ? Run(AnswerOrHangUp) : Call();
+
+    private static async Task<string?> AnswerOrHangUp(GrandstreamClient c)
     {
-        switch (_status.State)
-        {
-            case CallState.Incoming:
-                await Run(c => c.Answer());
-                break;
-            case CallState.Active or CallState.OnHold or CallState.Outgoing:
-                await Run(c => c.HangUp());
-                break;
-            default:
-                await Call();
-                break;
-        }
+        if (await c.Operation("acceptcall")) return null;
+        return await HangUp(c);
     }
 
-    private async Task Call()
+    private static async Task<string?> HangUp(GrandstreamClient c)
+    {
+        if (await c.Operation("endcall")) return null;
+        if (await c.Operation("cancel")) return null;
+        return "Phone refused to hang up.";
+    }
+
+    private static async Task<string?> Answer(GrandstreamClient c) =>
+        await c.Operation("acceptcall") ? null : "No incoming call to answer.";
+
+    private Task Call()
     {
         var number = Normalize(NumberBox.Text);
-        if (number.Length == 0) { FocusDialer(); return; }
+        if (number.Length == 0) { FocusDialer(); return Task.CompletedTask; }
         _lastNumber = number;
-        await Run(c => c.Dial(number));
+        _lastDialAt = DateTime.Now;
+        return Run(async c => await c.Dial(number)
+            ? null
+            : "Phone refused the call. On GRP260x, enable Click-To-Dial under Phone Settings > Call Settings.");
     }
 
-    private async Task Run(Func<GrandstreamClient, Task> action)
+    /// <summary>Runs a phone command. The command returns an error message, or null on success.</summary>
+    private async Task Run(Func<GrandstreamClient, Task<string?>> action)
     {
         if (_client is null || _busy) return;
         _busy = true;
@@ -309,7 +296,7 @@ public partial class MainWindow : Window
         ShowError(null);
         try
         {
-            await action(_client);
+            ShowError(await action(_client));
         }
         catch (Exception ex)
         {
@@ -324,15 +311,11 @@ public partial class MainWindow : Window
 
     private async void Primary_Click(object sender, RoutedEventArgs e)
     {
-        if (_status.State == CallState.Incoming) await Run(c => c.Answer());
+        if (_status.Online && !_status.Idle) await Run(Answer);
         else await Call();
     }
 
-    private async void HangUp_Click(object sender, RoutedEventArgs e)
-    {
-        if (_status.State == CallState.Incoming) await Run(c => c.Reject());
-        else await Run(c => c.HangUp());
-    }
+    private async void HangUp_Click(object sender, RoutedEventArgs e) => await Run(HangUp);
 
     private void Key_Click(object sender, RoutedEventArgs e)
     {

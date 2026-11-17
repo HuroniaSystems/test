@@ -112,7 +112,7 @@
                            Foreground="{StaticResource Danger}" Visibility="Collapsed" />
 
                 <TextBlock Margin="0,12,0,0" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource TextFaint}"
-                           Text="Numpad Enter focuses the dialer. Enter calls, answers, or hangs up. Esc clears." />
+                           Text="Numpad Enter focuses the dialer. Enter calls when idle; during a call it answers if ringing, otherwise hangs up. Esc clears." />
             </StackPanel>
 
             <!-- Settings view -->
@@ -122,18 +122,15 @@
                         <TextBlock Style="{StaticResource Label}" Text="PHONE IP ADDRESS" />
                         <TextBox x:Name="HostBox" Style="{StaticResource Input}" />
 
-                        <TextBlock Style="{StaticResource Label}" Text="ADMIN PASSWORD" Margin="0,12,0,6" />
+                        <TextBlock Style="{StaticResource Label}" Text="PHONE PASSWORD (admin or user)" Margin="0,12,0,6" />
                         <PasswordBox x:Name="PasswordBox" Style="{StaticResource PasswordInput}" />
-
-                        <TextBlock Style="{StaticResource Label}" Text="ACCOUNT (1 = first line)" Margin="0,12,0,6" />
-                        <TextBox x:Name="AccountBox" Style="{StaticResource Input}" Text="1" />
 
                         <CheckBox x:Name="HttpsCheck" Style="{StaticResource Check}" Content="Use HTTPS"
                                   Margin="0,14,0,4" />
                         <CheckBox x:Name="GlobalKeyCheck" Style="{StaticResource Check}"
                                   Content="Numpad Enter works from any app" />
                         <CheckBox x:Name="PopCheck" Style="{StaticResource Check}"
-                                  Content="Bring to front on incoming call" />
+                                  Content="Bring to front when a call starts on the phone" />
                         <CheckBox x:Name="TopCheck" Style="{StaticResource Check}" Content="Always on top" />
                     </StackPanel>
                 </Border>
@@ -155,7 +152,7 @@
                 </Grid>
 
                 <TextBlock Margin="0,12,0,0" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource TextFaint}"
-                           Text="On the phone's web UI, enable Click-To-Dial under Settings &gt; Call Features." />
+                           Text="Phone web UI: Network &gt; Remote Control. Enable Action URI Support, add this PC's IP (or any) to the Allowed IP List, and disable Remote Control Pop-up Window Support." />
             </StackPanel>
         </Grid>
     </Border>

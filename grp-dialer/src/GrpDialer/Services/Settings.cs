@@ -15,8 +15,6 @@ public sealed class Settings
     public string PhoneHost { get; set; } = "";
     public bool UseHttps { get; set; }
     public string PasswordProtected { get; set; } = "";
-    /// <summary>0-based SIP account index on the phone (0 = Account 1).</summary>
-    public int Account { get; set; }
     public bool GlobalNumpadEnter { get; set; } = true;
     public bool PopOnIncoming { get; set; } = true;
     public bool AlwaysOnTop { get; set; }

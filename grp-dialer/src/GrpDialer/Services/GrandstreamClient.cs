@@ -3,26 +3,30 @@ using System.Text.Json;
 
 namespace GrpDialer.Services;
 
-public enum CallState { Unknown, Idle, Incoming, Outgoing, Active, OnHold }
-
-public sealed record LineStatus(CallState State, string RemoteName, string RemoteNumber, int Line);
+/// <summary>
+/// Line status from api-get_line_status. The CTI guide documents only "idle" as a
+/// state value, so the app only distinguishes idle from not-idle and shows the
+/// phone's own state string verbatim.
+/// </summary>
+public sealed record LineStatus(bool Online, bool Idle, string RawState, string RemoteName, string RemoteNumber)
+{
+    public static readonly LineStatus Offline = new(false, true, "", "", "");
+}
 
 /// <summary>
-/// Thin wrapper over the Grandstream GRP26xx CTI HTTP API.
-///   GET /cgi-bin/api-make_call?phonenumber=..&amp;account=..&amp;passcode=..
-///   GET /cgi-bin/api-phone_operation?cmd=acceptcall|endcall|rejectcall|...&amp;passcode=..
-///   GET /cgi-bin/api-get_line_status?passcode=..
-/// Replies are JSON: {"response":"success","body":...}.
-/// Phone side: enable Click-To-Dial (Settings > Call Features) and use the admin password.
+/// Grandstream GRP26xx CTI API, per "GRP26xx Series - CTI Guide":
+///   GET /cgi-bin/api-get_line_status?passcode=PW
+///   GET /cgi-bin/api-make_call?passcode=PW&amp;phonenumber=NUMBER
+///   GET /cgi-bin/api-phone_operation?passcode=PW&amp;cmd=endcall|holdcall|acceptcall|rejectcall|cancel
+/// Success: {"response":"success","body":...}. Refused: {"response":"error","body":false|"failed"|"unknown"}.
 /// </summary>
 public sealed class GrandstreamClient : IDisposable
 {
     private readonly HttpClient _http;
     private readonly string _base;
     private readonly string _passcode;
-    private readonly int _account;
 
-    public GrandstreamClient(string host, bool https, string password, int account)
+    public GrandstreamClient(string host, bool https, string password)
     {
         var handler = new HttpClientHandler
         {
@@ -35,91 +39,59 @@ public sealed class GrandstreamClient : IDisposable
         if (host.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) host = host[8..];
         _base = $"{(https ? "https" : "http")}://{host}/cgi-bin/";
         _passcode = password;
-        _account = account;
     }
 
-    public Task Dial(string number, CancellationToken ct = default) =>
-        Command($"api-make_call?phonenumber={Uri.EscapeDataString(number)}&account={_account}", ct);
+    /// <summary>api-make_call. Returns false if the phone refused.</summary>
+    public Task<bool> Dial(string number, CancellationToken ct = default) =>
+        Command("api-make_call", $"phonenumber={Uri.EscapeDataString(number)}", ct);
 
-    public Task Answer(CancellationToken ct = default) => Operation("acceptcall", ct);
-    public Task Reject(CancellationToken ct = default) => Operation("rejectcall", ct);
-    public Task HangUp(CancellationToken ct = default) => Operation("endcall", ct);
-
-    private Task Operation(string cmd, CancellationToken ct) =>
-        Command($"api-phone_operation?cmd={cmd}", ct);
+    /// <summary>api-phone_operation. Returns false if the phone refused (e.g. nothing to accept).</summary>
+    public Task<bool> Operation(string cmd, CancellationToken ct = default) =>
+        Command("api-phone_operation", $"cmd={cmd}", ct);
 
     public async Task<LineStatus> GetStatus(CancellationToken ct = default)
     {
-        using var doc = await Get("api-get_line_status", ct);
+        using var doc = await Get("api-get_line_status", "", ct);
         var root = doc.RootElement;
-        EnsureSuccess(root);
+        if (!IsSuccess(root)) throw new PhoneException("Phone refused the request. Check the password.");
 
         if (!root.TryGetProperty("body", out var body) || body.ValueKind != JsonValueKind.Array)
-            return new LineStatus(CallState.Idle, "", "", 0);
+            return new LineStatus(true, true, "idle", "", "");
 
-        // Pick the most interesting line: incoming beats active beats outgoing.
-        LineStatus best = new(CallState.Idle, "", "", 0);
+        // First non-idle line wins; the phone lists lines in order.
         foreach (var line in body.EnumerateArray())
         {
-            var state = MapState(Str(line, "state"));
-            var current = new LineStatus(state, Str(line, "remotename"), Str(line, "remotenumber"),
-                line.TryGetProperty("line", out var l) && l.TryGetInt32(out var n) ? n : 0);
-            if (Rank(current.State) > Rank(best.State)) best = current;
+            var state = Str(line, "state");
+            if (!string.Equals(state, "idle", StringComparison.OrdinalIgnoreCase) && state.Length > 0)
+                return new LineStatus(true, false, state, Str(line, "remotename"), Str(line, "remotenumber"));
         }
-        return best;
+        return new LineStatus(true, true, "idle", "", "");
     }
-
-    private static int Rank(CallState s) => s switch
-    {
-        CallState.Incoming => 4,
-        CallState.Active => 3,
-        CallState.OnHold => 2,
-        CallState.Outgoing => 1,
-        _ => 0,
-    };
-
-    private static CallState MapState(string raw) => raw.Trim().ToLowerInvariant() switch
-    {
-        "idle" or "" => CallState.Idle,
-        "ringing" or "incoming" => CallState.Incoming,
-        "connected" or "talking" or "conference" or "transfer" or "transferring" => CallState.Active,
-        "onhold" or "hold" or "holding" => CallState.OnHold,
-        "dialing" or "calling" or "proceeding" or "ringback" or "outgoing" => CallState.Outgoing,
-        "failed" or "busy" => CallState.Idle,
-        _ => CallState.Active,
-    };
 
     private static string Str(JsonElement el, string name) =>
         el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
 
-    private async Task Command(string pathAndQuery, CancellationToken ct)
+    private static bool IsSuccess(JsonElement root) =>
+        root.TryGetProperty("response", out var r) &&
+        string.Equals(r.GetString(), "success", StringComparison.OrdinalIgnoreCase);
+
+    private async Task<bool> Command(string function, string query, CancellationToken ct)
     {
-        using var doc = await Get(pathAndQuery, ct);
-        EnsureSuccess(doc.RootElement);
+        using var doc = await Get(function, query, ct);
+        return IsSuccess(doc.RootElement);
     }
 
-    private async Task<JsonDocument> Get(string pathAndQuery, CancellationToken ct)
+    private async Task<JsonDocument> Get(string function, string query, CancellationToken ct)
     {
-        var sep = pathAndQuery.Contains('?') ? '&' : '?';
-        var url = $"{_base}{pathAndQuery}{sep}passcode={Uri.EscapeDataString(_passcode)}";
+        var url = $"{_base}{function}?passcode={Uri.EscapeDataString(_passcode)}";
+        if (query.Length > 0) url += "&" + query;
+
         using var resp = await _http.GetAsync(url, ct);
         var text = await resp.Content.ReadAsStringAsync(ct);
         if (!resp.IsSuccessStatusCode)
-            throw new PhoneException($"Phone returned HTTP {(int)resp.StatusCode}.");
+            throw new PhoneException($"Phone returned HTTP {(int)resp.StatusCode}. Is Action URI Support enabled?");
         try { return JsonDocument.Parse(text); }
-        catch (JsonException) { throw new PhoneException("Unexpected reply. Is this a Grandstream phone?"); }
-    }
-
-    private static void EnsureSuccess(JsonElement root)
-    {
-        if (root.TryGetProperty("response", out var r) &&
-            !string.Equals(r.GetString(), "success", StringComparison.OrdinalIgnoreCase))
-        {
-            var detail = root.TryGetProperty("body", out var b) ? b.ToString() : "";
-            throw new PhoneException(detail.Contains("auth", StringComparison.OrdinalIgnoreCase)
-                ? "Wrong password."
-                : $"Phone refused the request ({detail}).");
-        }
+        catch (JsonException) { throw new PhoneException("Unexpected reply. Is Action URI Support enabled?"); }
     }
 
     public void Dispose() => _http.Dispose();

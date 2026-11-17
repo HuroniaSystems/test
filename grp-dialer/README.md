@@ -8,9 +8,8 @@ CTI HTTP API: dial, answer, decline, hang up.
 | Key | Does |
 |---|---|
 | Numpad Enter (any app) | Brings window up, focuses dialer |
-| Enter, number typed | Calls |
-| Enter, incoming call | Answers |
-| Enter, in a call | Hangs up |
+| Enter, phone idle | Calls the typed number |
+| Enter, phone in use | Answers if ringing, otherwise hangs up |
 | Esc | Clears dialer |
 
 Main Enter is never hooked. Numpad Enter is only intercepted while another app
@@ -18,23 +17,44 @@ has focus; turn that off in Settings.
 
 ## Phone setup
 
-1. Phone web UI: **Settings > Call Features > Enable Click-To-Dial = Yes**.
-2. Note the phone IP (phone menu: Status > Network).
-3. In GRP Dialer, Settings: IP, admin password, account (1 = first line).
-   Use **Test**, then **Save**.
+From Grandstream's *GRP26xx Series - CTI Guide*:
 
-Password is stored DPAPI-encrypted in `%APPDATA%\GrpDialer\settings.json`
-(readable only by your Windows user).
+1. Phone web UI as admin: **Network > Remote Control**
+   (GRP260x: Network Settings > Advanced Settings > Remote Control).
+2. **Action URI Support**: Enabled.
+3. **Action URI Allowed IP List**: this PC's IP, or `any`.
+4. **Remote Control Pop-up Window Support**: Disabled (else the phone asks for
+   confirmation on every command).
+5. Save and Apply.
+6. GRP260x only: enable **Click-To-Dial** under Phone Settings > Call Settings.
+
+Supported on GRP2634 firmware 1.0.9.22+.
+
+In GRP Dialer, Settings: phone IP and its admin or user password. Use
+**Test**, then **Save**. Password is stored DPAPI-encrypted in
+`%APPDATA%\GrpDialer\settings.json` (readable only by your Windows user).
 
 ## API used
 
+All calls are documented in the CTI guide:
+
 ```
-GET /cgi-bin/api-get_line_status?passcode=PW
-GET /cgi-bin/api-make_call?phonenumber=NUM&account=0&passcode=PW
-GET /cgi-bin/api-phone_operation?cmd=acceptcall|rejectcall|endcall&passcode=PW
+GET /cgi-bin/api-get_line_status?passcode=PW                 (polled every 1 s)
+GET /cgi-bin/api-make_call?passcode=PW&phonenumber=NUMBER
+GET /cgi-bin/api-phone_operation?passcode=PW&cmd=acceptcall
+GET /cgi-bin/api-phone_operation?passcode=PW&cmd=endcall
+GET /cgi-bin/api-phone_operation?passcode=PW&cmd=cancel
 ```
 
-Status is polled once per second.
+The guide documents only `"idle"` as a line `state` value, so the app treats
+anything else as "in use" and shows the phone's state string as-is. It does
+not assume names for ringing/connected states:
+
+- Answer / Enter while in use sends `acceptcall`. The phone replies
+  `{"response":"error"}` when there is nothing to accept.
+- Enter then falls back to `endcall`, then `cancel` ("reject or cancel calls").
+- The window pops to front when the line leaves idle without this app having
+  dialed in the last 10 seconds.
 
 ## Build
 
