@@ -49,6 +49,10 @@ public sealed class GrandstreamClient : IDisposable
     public Task<bool> Operation(string cmd, CancellationToken ct = default) =>
         Command("api-phone_operation", $"cmd={cmd}", ct);
 
+    /// <summary>Presses phone keys (CTI api-send_key), e.g. "HOLD" or "LINE1"; several joined with ':'.</summary>
+    public Task<bool> SendKey(string keys, CancellationToken ct = default) =>
+        Command("api-send_key", $"keys={keys}", ct);
+
     public async Task<LineStatus> GetStatus(CancellationToken ct = default)
     {
         using var doc = await Get("api-get_line_status", "", ct);

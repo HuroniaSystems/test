@@ -39,6 +39,11 @@ public partial class MainWindow : Window
     private bool _formatting;            // the number box mask is rewriting the text
     private DateTime? _activeSince;      // when the current call was answered / connected
     private readonly CallBar _bar = new();
+    private bool _wasRinging;            // last status was an incoming call still ringing
+    private bool _autoShown;             // dialer opened by itself for an answered call; untouched since
+    private bool _blocked;               // phone unreachable: dialer dimmed
+    private SolidColorBrush? _pillBg, _pillFg;
+    private string _pillKey = "";
 
     // PropelRx caller lookup for calls this app didn't place.
     private PropelLookup? _propel;
@@ -86,6 +91,7 @@ public partial class MainWindow : Window
         {
             if (e.PropertyName == nameof(SystemParameters.WorkArea) && IsVisible) Dispatcher.BeginInvoke(Place);
         };
+        Activated += (_, _) => _autoShown = false;
         Deactivated += async (_, _) =>
         {
             _deactivatedAt = DateTime.UtcNow;
@@ -167,31 +173,25 @@ public partial class MainWindow : Window
     // ================= Call bar =================
 
     /// <summary>
-    /// Shows the call bar while the line is busy: above the clock, or stacked just above the
-    /// dialer when that's open. If the open dialer leaves no room (tall Settings), the bar waits.
+    /// The mini call bar, only while a call is ringing in: above the clock, or stacked just above
+    /// the dialer when that's open. If the open dialer leaves no room (tall Settings), it waits.
+    /// Once answered it fades out and the dialer takes over (see UpdateStatus).
     /// </summary>
     private void RenderBar()
     {
         var s = _status;
-        if (!(s.Online && !s.Idle))
+        bool busy = s.Online && !s.Idle;
+        if (!busy || CallPhases.From(s) != CallPhase.Incoming)
         {
-            if (_bar.IsVisible) _bar.Hide();
+            if (_bar.IsVisible) _bar.Leave(answered: busy);
             return;
         }
 
-        var phase = CallPhases.From(s);
-        bool ringing = phase == CallPhase.Incoming;
-        string number = s.RemoteNumber.Length > 0 ? s.RemoteNumber
-            : DateTime.Now - _lastDialAt < TimeSpan.FromMinutes(5) ? _lastNumber : "";
-        string who = number.Length > 0 ? PhoneNumber.Display(number)
+        string who = s.RemoteNumber.Length > 0 ? PhoneNumber.Display(s.RemoteNumber)
             : s.RemoteName.Length > 0 ? s.RemoteName
             : "Unknown number";
-        string? caption = ringing ? null
-            : _activeSince is DateTime since ? (phase == CallPhase.OnHold ? "On hold · " : "") + Elapsed(DateTime.Now - since)
-            : phase == CallPhase.Calling ? "Calling…"
-            : null;
-        if (_callerCaption is not null) caption = caption is null ? _callerCaption : caption + " · " + _callerCaption;
-        _bar.Update(who, s.RemoteName, ringing, caption, enabled: !_busy);
+        string caption = "Incoming Call" + (_callerCaption is null ? "" : " · " + _callerCaption);
+        _bar.Update(who, s.RemoteName, caption, enabled: !_busy);
 
         // Position (measure first if it hasn't been shown yet).
         var wa = SystemParameters.WorkArea;
@@ -211,13 +211,15 @@ public partial class MainWindow : Window
         }
         _bar.Left = wa.Right - _bar.Width + Shadow - Gap;
         _bar.Top = top;
-        if (!_bar.IsVisible) _bar.Show();
+        if (!_bar.IsVisible || _bar.Leaving) _bar.Enter();
     }
 
     /// <param name="activate">false shows it without taking focus from what the user is doing.</param>
     public void ShowFlyout(bool activate = true)
     {
+        bool appearing = !IsVisible;
         Place();
+        if (appearing && Content is UIElement root) Motion.In(root, 8);
         if (activate)
         {
             WindowFocus.ForceForeground(this);
@@ -313,7 +315,7 @@ public partial class MainWindow : Window
         DialerView.Visibility = show ? Visibility.Collapsed : Visibility.Visible;
         SettingsView.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         HeaderTitle.Text = show ? "Settings" : "GRP Dialer";
-        SettingsGlyph.Text = show ? "" : "";
+        SettingsGlyph.Data = show ? Icons.Back : Icons.Settings;
         SettingsBtn.ToolTip = show ? "Back to dialer" : "Settings";
         SettingsMsg.Visibility = Visibility.Collapsed;
 
@@ -452,7 +454,7 @@ public partial class MainWindow : Window
     private void SetAdvanced(bool open)
     {
         AdvancedPanel.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
-        AdvancedGlyph.Text = open ? "" : "";
+        AdvancedGlyph.Data = open ? Icons.ChevronDown : Icons.ChevronRight;
     }
 
     private void Advanced_Click(object sender, RoutedEventArgs e) =>
@@ -537,14 +539,28 @@ public partial class MainWindow : Window
         else if (_activeSince is null && phase is CallPhase.Connected or CallPhase.OnHold or CallPhase.InUse)
             _activeSince = DateTime.Now;
 
+        bool ringing = isBusy && phase == CallPhase.Incoming;
+        if (_wasRinging && isBusy && !ringing && !IsVisible) _ = TakeOverFromBar();
+        if (wasBusy && !isBusy && _autoShown && IsVisible && !IsActive && _queue.Count == 0) HideFlyout();
+        if (!isBusy) _autoShown = false;
+        _wasRinging = ringing;
+
         Render();
+    }
+
+    /// <summary>Answered from the mini bar (or the handset): once its phone has turned orange, the dialer appears.</summary>
+    private async Task TakeOverFromBar()
+    {
+        await Task.Delay(220);
+        if (IsVisible || !(_status.Online && !_status.Idle)) return;
+        ShowFlyout(activate: false);
+        _autoShown = true;
     }
 
     /// <summary>Runs 4x a second: call timer, queue countdown.</summary>
     private void OnTick()
     {
-        TimerText.Text = _activeSince is DateTime since ? Elapsed(DateTime.Now - since) : "";   // same clock as the call bar
-        if (_bar.IsVisible) RenderBar();
+        if (_activeSince is not null) StateText.Text = PillText();
 
         if (_client is not null)
         {
@@ -579,11 +595,12 @@ public partial class MainWindow : Window
         bool configured = _client is not null;
         bool hasText = PhoneNumber.Normalize(NumberBox.Text).Length > 0;
 
-        // Header: one plain-words connection line. Details only in the tooltip.
-        if (!configured) SetConnection(null, "Not set up", null);
-        else if (s.Online) SetConnection(true, "Phone connected", _settings.PhoneHost);
-        else if (!_everConnected && _connError.Length == 0) SetConnection(null, "Connecting…", _settings.PhoneHost);
-        else SetConnection(false, "Phone offline", $"{_settings.PhoneHost}: {_connError}");
+        // Header: nothing when all is well; a short error otherwise (details in the tooltip).
+        bool unreachable = configured && !s.Online && _connError.Length > 0;
+        if (!configured) SetConnection("Not set up", null);
+        else if (unreachable) SetConnection(ShortError(_connError), $"{_settings.PhoneHost}: {_connError}");
+        else SetConnection(null, null);
+        SetBlocked(unreachable);
 
         // Call card
         string label = !configured ? "Not set up" : !_everConnected && !s.Online && _connError.Length == 0
@@ -595,9 +612,15 @@ public partial class MainWindow : Window
             CallPhase.Incoming or CallPhase.OnHold => ("WarnBg", "WarnInk"),
             _ => ("OkBg", "OkInk"),
         };
-        StateText.Text = label;
-        StateText.Foreground = Res(fg);
-        StatePill.Background = Res(bg);
+        _pillLabel = label;
+        StateText.Text = PillText();
+        if (bg + fg != _pillKey)
+        {
+            bool animate = _pillKey.Length > 0;
+            _pillKey = bg + fg;
+            _pillBg = Motion.Tint(_pillBg, ((SolidColorBrush)Res(bg)).Color, b => StatePill.Background = b, animate);
+            _pillFg = Motion.Tint(_pillFg, ((SolidColorBrush)Res(fg)).Color, b => StateText.Foreground = b, animate);
+        }
         StatePill.ToolTip = busy && s.RawState.Length > 0 ? $"Phone reports \"{s.RawState}\"" : null;
 
         string number = s.RemoteNumber.Length > 0 ? s.RemoteNumber
@@ -626,10 +649,10 @@ public partial class MainWindow : Window
         }
         RemoteNumber.Visibility = RemoteNumber.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         CallerText.Text = busy ? _callerCaption ?? "" : "";
-        CallerText.Visibility = CallerText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        Reveal(CallerText, CallerText.Text.Length > 0);
 
         // Entry
-        NumberBox.Tag = busy ? "Type a number to queue it" : "Type a number";
+        NumberBox.Tag = busy ? "Add number to queue" : "Type a number";
         QueueBtn.Visibility = busy && hasText ? Visibility.Visible : Visibility.Collapsed;
         QueueBtn.IsEnabled = !_busy;
 
@@ -640,15 +663,23 @@ public partial class MainWindow : Window
         HangUpBtn.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         Grid.SetColumn(HangUpBtn, canAnswer ? 2 : 0);
         Grid.SetColumnSpan(HangUpBtn, canAnswer ? 1 : 3);
+        bool holdable = phase is CallPhase.Connected or CallPhase.OnHold;
+        bool onHold = phase == CallPhase.OnHold;
+        HoldBtn.Visibility = holdable ? Visibility.Visible : Visibility.Collapsed;
+        HoldBtn.IsEnabled = !_busy;
+        HoldIcon.Data = onHold ? Icons.Play : Icons.Pause;
+        HoldBtn.ToolTip = onHold ? "Resume" : "Hold";
+        if (onHold) HoldBtn.Background = Res("WarnBg"); else HoldBtn.ClearValue(BackgroundProperty);
 
         CallBtnText.Text = !hasText && _queue.Count > 0 ? "Call next" : "Call";
         CallBtn.IsEnabled = s.Online && !_busy && (hasText || _queue.Count > 0);
         AnswerBtn.IsEnabled = !_busy;
         HangUpBtn.IsEnabled = !_busy;
 
+        // [ENTER] + what it does right now
         TipText.Text = busy
-            ? (hasText ? "Enter adds it to the queue" : canAnswer ? "Enter answers · type to queue" : "Enter hangs up · type to queue")
-            : "Enter calls · Esc clears";
+            ? (hasText ? "Add to queue" : canAnswer ? "Answer" : "Hang up")
+            : !hasText && _queue.Count > 0 ? "Call next" : "Call";
 
         RenderQueueStatus();
         RenderTray(label, busy ? RemoteName.Text : "");
@@ -666,23 +697,60 @@ public partial class MainWindow : Window
         Tray.SetStatus(text, _client is not null && _status.Online);
     }
 
-    private void SetConnection(bool? ok, string text, string? detail)
+    private string _pillLabel = "Ready";
+
+    /// <summary>"Connected 1:23": the state, with the call time once the call is answered.</summary>
+    private string PillText() =>
+        _activeSince is DateTime since && _status.Online && !_status.Idle
+            ? $"{_pillLabel} {Elapsed(DateTime.Now - since)}"
+            : _pillLabel;
+
+    /// <summary>A few words for the header; the full reason is in its tooltip.</summary>
+    private static string ShortError(string detail) =>
+        detail.Contains("password", StringComparison.OrdinalIgnoreCase) ? "Wrong password"
+        : detail.Contains("Action URI", StringComparison.OrdinalIgnoreCase) ? "Remote control off"
+        : "Failed to connect";
+
+    private void SetConnection(string? error, string? detail)
     {
-        ConnDot.Fill = ok switch
-        {
-            true => Brushes.White,
-            false => Res("Danger"),
-            _ => Res("BrandSub"),
-        };
-        ConnText.Text = text;
-        ConnText.Foreground = ok == true ? Brushes.White : Res("BrandSub");
+        bool show = error is not null;
+        if (show) ConnText.Text = error;
         ConnPanel.ToolTip = detail;
+        Reveal(ConnPanel, show);
+    }
+
+    /// <summary>Dim and lock the dialer while the phone can't be reached.</summary>
+    private void SetBlocked(bool blocked)
+    {
+        if (blocked == _blocked) return;
+        _blocked = blocked;
+        DialerView.IsEnabled = !blocked;
+        if (blocked)
+        {
+            Blocker.Visibility = Visibility.Visible;
+            Blocker.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0.6, Motion.Settle));
+        }
+        else
+        {
+            var fade = new System.Windows.Media.Animation.DoubleAnimation(0, Motion.Quick);
+            fade.Completed += (_, _) => { if (!_blocked) Blocker.Visibility = Visibility.Collapsed; };
+            Blocker.BeginAnimation(OpacityProperty, fade);
+            FocusDialer(selectAll: false);
+        }
+    }
+
+    /// <summary>Show/hide, fading in when something appears.</summary>
+    private static void Reveal(UIElement el, bool show)
+    {
+        bool was = el.Visibility == Visibility.Visible;
+        el.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (show && !was) Motion.FadeIn(el);
     }
 
     private void RenderQueue()
     {
         int n = _queue.Count;
-        QueuePanel.Visibility = n > 0 ? Visibility.Visible : Visibility.Collapsed;
+        Reveal(QueuePanel, n > 0);
         QueueTitle.Text = $"Up next · {n}";
         QueueList.ItemsSource = _queue.Items
             .Select((num, i) => new QueueRow(i, $"{i + 1}", PhoneNumber.Display(num)))
@@ -720,7 +788,7 @@ public partial class MainWindow : Window
     private void ShowMessage(string? text, bool info = false, string? actionLabel = null, Action? action = null)
     {
         MessageText.Text = text ?? "";
-        MsgPanel.Visibility = string.IsNullOrEmpty(text) ? Visibility.Collapsed : Visibility.Visible;
+        Reveal(MsgPanel, !string.IsNullOrEmpty(text));
         MsgPanel.Background = Res(info ? "BrandLight" : "DangerBg");
         MessageText.Foreground = Res(info ? "Ink" : "DangerInk");
         _msgAction = action;
@@ -738,6 +806,7 @@ public partial class MainWindow : Window
     /// </summary>
     private async Task EnterAction()
     {
+        if (_blocked) return;
         var typed = PhoneNumber.Normalize(NumberBox.Text);
         bool busy = _status.Online && !_status.Idle;
         bool callStarting = DateTime.Now - _lastDialAt < TimeSpan.FromSeconds(3) && !busy;
@@ -843,6 +912,19 @@ public partial class MainWindow : Window
     }
 
     private async void Answer_Click(object sender, RoutedEventArgs e) => await Run(Answer);
+
+    private async void Hold_Click(object sender, RoutedEventArgs e) =>
+        await Run(CallPhases.From(_status) == CallPhase.OnHold ? Resume : Hold);
+
+    private static async Task<string?> Hold(GrandstreamClient c) =>
+        await c.Operation("holdcall") ? null : "The phone didn't put the call on hold.";
+
+    /// <summary>
+    /// The CTI guide has no "resume" command, so press the phone's HOLD key (it toggles), and
+    /// failing that the line key, which picks a held call back up.
+    /// </summary>
+    private static async Task<string?> Resume(GrandstreamClient c) =>
+        await c.SendKey("HOLD") || await c.SendKey("LINE1") ? null : "The phone didn't take the call off hold.";
     private async void HangUp_Click(object sender, RoutedEventArgs e) => await Run(HangUp);
 
     private void Queue_Click(object sender, RoutedEventArgs e)

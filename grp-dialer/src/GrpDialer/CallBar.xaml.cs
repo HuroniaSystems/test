@@ -4,14 +4,15 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
 
 namespace GrpDialer;
 
 /// <summary>
-/// Thin always-visible strip for the current call: green dot + Answer / Decline while it rings,
-/// orange dot + call time + End once it's active. Never takes keyboard focus, never hides on
-/// click-away; it goes away when the line is idle again.
+/// Thin strip shown only while a call is ringing in: green phone, number, "Incoming Call",
+/// Answer (gently glowing) and Decline. When the call is answered the phone turns orange and the
+/// strip fades away as the dialer takes over. Never takes keyboard focus and never hides on
+/// click-away.
 /// </summary>
 public partial class CallBar : Window
 {
@@ -19,16 +20,17 @@ public partial class CallBar : Window
     public event Action? DeclineClicked;
     public event Action? OpenDialer;
 
-    private readonly DoubleAnimation _pulse = new(1, 0.3, TimeSpan.FromMilliseconds(700))
-    {
-        AutoReverse = true,
-        RepeatBehavior = RepeatBehavior.Forever,
-    };
-    private bool? _ringing;             // null until the first update
+    private static readonly Color Ring = Color.FromRgb(0x22, 0xA3, 0x5A);
+    private static readonly Color Active = Color.FromRgb(0xF0, 0x8C, 0x1A);
+    private readonly DropShadowEffect _glow = new() { Color = Ring, ShadowDepth = 0, BlurRadius = 6, Opacity = 0 };
+    private SolidColorBrush? _phone;
+    private int _visit;                  // bumps each time the bar comes in, so a stale fade-out can't hide a new call
 
     public CallBar()
     {
         InitializeComponent();
+        AnswerBtn.Effect = _glow;
+        Caption.Visibility = Visibility.Visible;
         SourceInitialized += (_, _) =>
         {
             // A tool window that never activates: clicking Answer doesn't pull focus from the user's app
@@ -38,33 +40,49 @@ public partial class CallBar : Window
         };
     }
 
-    public bool Ringing => _ringing == true;
+    /// <summary>Fading out after the call was answered, declined or missed.</summary>
+    public bool Leaving { get; private set; }
 
-    /// <param name="ringing">Incoming and not answered yet.</param>
-    /// <param name="caption">Call time or "Calling…"; null hides the caption line.</param>
-    public void Update(string who, string? name, bool ringing, string? caption, bool enabled)
+    public void Update(string who, string? name, string caption, bool enabled)
     {
         NumberText.Text = who;
         Who.ToolTip = string.IsNullOrEmpty(name) ? "Open the dialer" : name + " · open the dialer";
-
-        if (ringing != _ringing)
-        {
-            _ringing = ringing;
-            Dot.Fill = (Brush)FindResource(ringing ? "RingDot" : "ActiveDot");
-            Dot.BeginAnimation(OpacityProperty, ringing ? _pulse : null);
-            AnswerBtn.Visibility = ringing ? Visibility.Visible : Visibility.Collapsed;
-            DeclineText.Text = ringing ? "Decline" : "End";
-            DeclineBtn.ToolTip = ringing ? "Decline the call" : "Hang up";
-            // Ringing: two buttons, so the caption takes the full width underneath.
-            // Active: one small End button centred beside both lines.
-            System.Windows.Controls.Grid.SetColumnSpan(Caption, ringing ? 2 : 1);
-            System.Windows.Controls.Grid.SetRowSpan(Buttons, ringing ? 1 : 2);
-            Caption.Margin = new Thickness(18, ringing ? 4 : 1, 0, 0);
-        }
-
-        Caption.Text = caption ?? "";
-        Caption.Visibility = caption is null ? Visibility.Collapsed : Visibility.Visible;
+        Caption.Text = caption;
         AnswerBtn.IsEnabled = DeclineBtn.IsEnabled = enabled;
+    }
+
+    /// <summary>Show for a ringing call: settle in from below, green phone, Answer starts to breathe.</summary>
+    public void Enter()
+    {
+        _visit++;
+        bool wasShown = IsVisible && !Leaving;
+        Leaving = false;
+        _phone = Motion.Tint(_phone, Ring, b => Dot.Foreground = b, animate: false);
+        _glow.BeginAnimation(DropShadowEffect.OpacityProperty, Motion.Breathe(0.12, 0.5));
+        _glow.BeginAnimation(DropShadowEffect.BlurRadiusProperty, Motion.Breathe(6, 16));
+        if (!IsVisible) Show();
+        if (!wasShown) Motion.In(Root, 10);
+    }
+
+    /// <summary>
+    /// The call stopped ringing. Answered: the phone eases to orange first, then the strip fades.
+    /// Declined or missed: it just fades.
+    /// </summary>
+    public async void Leave(bool answered)
+    {
+        if (!IsVisible || Leaving) return;
+        Leaving = true;
+        int visit = _visit;
+        _glow.BeginAnimation(DropShadowEffect.OpacityProperty, null);
+        _glow.BeginAnimation(DropShadowEffect.BlurRadiusProperty, null);
+        _glow.Opacity = 0;
+        if (answered)
+        {
+            _phone = Motion.Tint(_phone, Active, b => Dot.Foreground = b);
+            await Task.Delay(320);
+            if (visit != _visit) return;
+        }
+        Motion.Leave(Root, () => { if (visit == _visit && Leaving) Hide(); });
     }
 
     private void Answer_Click(object sender, RoutedEventArgs e) => AnswerClicked?.Invoke();

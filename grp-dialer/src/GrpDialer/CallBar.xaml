@@ -1,6 +1,7 @@
 <Window x:Class="GrpDialer.CallBar"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:GrpDialer"
         Title="GRP Dialer call"
         Width="364" SizeToContent="Height"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
@@ -11,7 +12,7 @@
         UseLayoutRounding="True">
 
     <!-- Thin call strip, same width as the dialer. Stays up for the whole call. -->
-    <Grid Margin="12">
+    <Grid x:Name="Root" Margin="12">
         <Border CornerRadius="12" Background="White">
             <Border.Effect>
                 <DropShadowEffect BlurRadius="18" ShadowDepth="2" Opacity="0.3" Color="Black" />
@@ -33,28 +34,28 @@
                 <!-- Number (click opens the dialer) -->
                 <StackPanel x:Name="Who" Orientation="Horizontal" VerticalAlignment="Center" Background="Transparent"
                             Cursor="Hand" MouseLeftButtonUp="Who_Click">
-                    <Ellipse x:Name="Dot" Width="9" Height="9" VerticalAlignment="Center" Margin="0,1,9,0"
-                             Fill="{StaticResource RingDot}" />
+                    <!-- Phone icon carries the state colour: green ringing, orange once answered -->
+                    <local:Ico x:Name="Dot" Data="{x:Static local:Icons.Phone}" Size="15" Margin="0,0,7,0" />
                     <TextBlock x:Name="NumberText" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
                                VerticalAlignment="Center" Text="(705) 555-1234" />
                 </StackPanel>
 
                 <!-- Call time and/or PropelRx match. Runs under the buttons while ringing so the name fits. -->
-                <TextBlock x:Name="Caption" Grid.Row="1" FontSize="11.5" Foreground="{StaticResource Muted}" Margin="18,1,0,0"
+                <TextBlock x:Name="Caption" Grid.Row="1" Grid.ColumnSpan="2" FontSize="11.5" Foreground="{StaticResource Muted}" Margin="22,4,0,0"
                            TextTrimming="CharacterEllipsis" Visibility="Collapsed" />
 
-                <StackPanel x:Name="Buttons" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0">
-                    <Button x:Name="AnswerBtn" Style="{StaticResource PrimaryButton}" Height="32" Padding="11,0"
+                <StackPanel x:Name="Buttons" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0">
+                    <Button x:Name="AnswerBtn" Style="{StaticResource PrimaryButton}" Height="32" Padding="9,0" FontSize="12.5"
                             Click="Answer_Click" ToolTip="Answer">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Style="{StaticResource Icon}" Text="&#xE717;" FontSize="12" Margin="0,0,6,0" />
+                            <local:Ico Data="{x:Static local:Icons.Phone}" Size="13" Margin="0,0,5,0" />
                             <TextBlock Text="Answer" />
                         </StackPanel>
                     </Button>
-                    <Button x:Name="DeclineBtn" Style="{StaticResource DangerButton}" Height="32" Padding="11,0" Margin="6,0,0,0"
+                    <Button x:Name="DeclineBtn" Style="{StaticResource DangerButton}" Height="32" Padding="9,0" Margin="6,0,0,0" FontSize="12.5"
                             Click="Decline_Click">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Style="{StaticResource Icon}" Text="&#xE778;" FontSize="12" Margin="0,0,6,0" />
+                            <local:Ico Data="{x:Static local:Icons.HangUp}" Size="16" Margin="0,0,5,0" />
                             <TextBlock x:Name="DeclineText" Text="Decline" />
                         </StackPanel>
                     </Button>

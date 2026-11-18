@@ -1,7 +1,8 @@
 using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Text;
+using System.IO;
 using System.Runtime.InteropServices;
+using M = System.Windows.Media;
+using MI = System.Windows.Media.Imaging;
 using WF = System.Windows.Forms;
 
 namespace GrpDialer.Services;
@@ -55,36 +56,29 @@ public sealed class TrayIcon : IDisposable
         Free(_offline);
     }
 
-    /// <summary>A rounded square in <paramref name="fill"/> with a white handset, drawn at 32 px.</summary>
+    /// <summary>A rounded square in <paramref name="fill"/> with the app's solid white phone, drawn at 32 px.</summary>
     private static Icon Draw(Color fill)
     {
-        using var bmp = new Bitmap(32, 32);
-        using (var g = Graphics.FromImage(bmp))
+        var dv = new M.DrawingVisual();
+        using (var dc = dv.RenderOpen())
         {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            g.Clear(Color.Transparent);
-            using (var path = RoundRect(new RectangleF(1, 1, 30, 30), 7))
-            using (var brush = new SolidBrush(fill))
-                g.FillPath(brush, path);
-
-            using var font = new Font("Segoe MDL2 Assets", 15f, GraphicsUnit.Pixel);
-            using var fmt = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-            g.DrawString("", font, Brushes.White, new RectangleF(0, 1, 32, 32), fmt);
+            var bg = new M.SolidColorBrush(M.Color.FromRgb(fill.R, fill.G, fill.B));
+            dc.DrawRoundedRectangle(bg, null, new System.Windows.Rect(1, 1, 30, 30), 7, 7);
+            dc.PushTransform(new M.TranslateTransform(7, 7));
+            dc.PushTransform(new M.ScaleTransform(18 / 24.0, 18 / 24.0));
+            dc.DrawGeometry(M.Brushes.White, null, GrpDialer.Icons.Phone);
+            dc.Pop();
+            dc.Pop();
         }
+        var rtb = new MI.RenderTargetBitmap(32, 32, 96, 96, M.PixelFormats.Pbgra32);
+        rtb.Render(dv);
+        var png = new MI.PngBitmapEncoder();
+        png.Frames.Add(MI.BitmapFrame.Create(rtb));
+        using var ms = new MemoryStream();
+        png.Save(ms);
+        ms.Position = 0;
+        using var bmp = new Bitmap(ms);
         return Icon.FromHandle(bmp.GetHicon());
-    }
-
-    private static GraphicsPath RoundRect(RectangleF r, float radius)
-    {
-        float d = radius * 2;
-        var p = new GraphicsPath();
-        p.AddArc(r.Left, r.Top, d, d, 180, 90);
-        p.AddArc(r.Right - d, r.Top, d, d, 270, 90);
-        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
-        p.AddArc(r.Left, r.Bottom - d, d, d, 90, 90);
-        p.CloseFigure();
-        return p;
     }
 
     private static void Free(Icon icon)

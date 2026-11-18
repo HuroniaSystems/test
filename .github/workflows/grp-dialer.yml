@@ -47,7 +47,15 @@ jobs:
           $notes = @"
           GRP Dialer for Windows 10/11. Controls a Grandstream GRP2634 over its CTI API: dial, answer, hang up.
 
-          What's new in 1.4:
+          What's new in 1.5:
+          - The mini call bar is for incoming calls only: green phone, number, "Incoming Call" (plus any PropelRx match), Answer gently glowing, Decline. When answered the phone turns orange, the bar fades and the dialer opens without taking focus (it tucks away again after the call if you didn't touch it).
+          - Hold: a small square button beside Hang up (pause icon; play to resume).
+          - Call time sits in the state badge ("Connected 1:23") on the caller's line.
+          - Key hints read [ENTER] Call / Answer / Hang up / Add to queue; on a call the box says "Add number to queue".
+          - Header shows nothing when all is well, and a short error ("Failed to connect", "Wrong password") when not; the dialer dims and locks until the phone is back.
+          - One set of solid icons throughout (and in the tray); subtle eased animations for the bar, dialer, badges and panels.
+
+          New in 1.4:
           - Caller lookup in PropelRx: for incoming calls, a small caption under the number says "Potentially JANE DOE" when one patient has that phone number, or "Multiple linked profiles" when several do. Nothing is shown when there's no match. Turn it on in Settings > Caller lookup with the PropelRx server (e.g. svr1), the same one OTC Monitor uses. It signs in as the current Windows user; a different account can be set under Advanced.
 
           New in 1.3:

@@ -36,7 +36,6 @@
     <SolidColorBrush x:Key="ActiveDot" Color="#F08C1A" />
 
     <FontFamily x:Key="UiFont">pack://application:,,,/GrpDialer;component/Fonts/#Roboto</FontFamily>
-    <FontFamily x:Key="IconFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
 
     <!-- Selection: dark text on a light tint -->
     <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#E3F2EC" />
@@ -47,11 +46,20 @@
         <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
     </Style>
 
-    <Style x:Key="Icon" TargetType="TextBlock">
-        <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
-        <Setter Property="FontSize" Value="14" />
+    <!-- Key cap for keyboard hints: [ENTER] Call -->
+    <Style x:Key="Kbd" TargetType="Border">
+        <Setter Property="Background" Value="White" />
+        <Setter Property="BorderBrush" Value="{StaticResource LineStrong}" />
+        <Setter Property="BorderThickness" Value="1,1,1,2" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="5,1,5,1" />
         <Setter Property="VerticalAlignment" Value="Center" />
-        <Setter Property="HorizontalAlignment" Value="Center" />
+    </Style>
+    <Style x:Key="KbdText" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+        <Setter Property="FontSize" Value="9.5" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Foreground" Value="{StaticResource Muted}" />
     </Style>
 
     <!-- Section label inside a card -->

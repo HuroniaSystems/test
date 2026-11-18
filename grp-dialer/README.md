@@ -16,16 +16,35 @@ Type a number, press **Enter**. That's it. The box formats the number as you
 type, e.g. `(705) 555-1234`, and ignores letters; extensions and `*`/`#` codes
 stay as typed.
 
-### Call bar
+### Incoming call bar
 
-During any call a thin strip, the same width as the dialer, sits above the
-clock (or just above the dialer when it's open):
+While a call rings in, a thin strip the same width as the dialer sits above the
+clock (or just above the dialer when it's open): a green phone, the caller's
+number, **Incoming Call** (plus any PropelRx match), a gently glowing
+**Answer** and **Decline**. It stays while ringing, even when you click away,
+and never takes keyboard focus. Click the number to open the dialer.
 
-- **Ringing:** green pulsing dot, the caller's number, **Answer** and **Decline**.
-- **Answered / outgoing:** orange dot, the call time underneath, **End**.
+When the call is answered (here or on the handset) the phone turns orange, the
+strip fades and the dialer opens without taking focus. If you don't touch it,
+it tucks away again when the call ends.
 
-It stays for the whole call, even when you click away, and never takes keyboard
-focus from the app you're in. Click the number to open the dialer.
+### During a call
+
+The state badge sits on the caller's line with the call time: **Connected
+1:23**, **On hold 0:42**. The small square button beside **Hang up** puts the
+call on hold (pause icon) and resumes it (play icon). The key hint under the
+buttons always says what Enter does right now: **[ENTER] Call**, **Answer**,
+**Hang up** or **Add to queue**.
+
+Hold uses `api-phone_operation?cmd=holdcall`. The CTI guide has no resume
+command, so resume presses the phone's HOLD key (`api-send_key?keys=HOLD`),
+falling back to the line key (`keys=LINE1`).
+
+### When the phone can't be reached
+
+The header shows a short reason (**Failed to connect**, **Wrong password**,
+**Remote control off**, **Not set up**; hover for details) and the dialer is
+dimmed and locked until the phone answers again. Settings stays reachable.
 
 ### Caller lookup (PropelRx)
 
@@ -136,5 +155,7 @@ GitHub release.
 ## Style
 
 Light theme only. Palette, Roboto font and control shapes match the OTC Monitor
-client (brand green `#016E4F` on `#F3F6F8`, white cards). Roboto is bundled
+client (brand green `#016E4F` on `#F3F6F8`, white cards). Icons are one solid
+set from Material Design Icons (Pictogrammers, Apache 2.0), drawn from
+`Icons.cs`; animations are short and eased (`Motion.cs`). Roboto is bundled
 under the Apache 2.0 license (`src/GrpDialer/Fonts/LICENSE`).
