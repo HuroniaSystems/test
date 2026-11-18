@@ -8,11 +8,16 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>GrpDialer</AssemblyName>
     <RootNamespace>GrpDialer</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Product>GRP Dialer</Product>
     <Company>Huronia Systems</Company>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Roboto (Apache 2.0, see Fonts/LICENSE), same face as OTC Monitor -->
+    <Resource Include="Fonts\*.ttf" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />

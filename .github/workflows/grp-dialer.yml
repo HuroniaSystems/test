@@ -23,6 +23,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+      - name: Test
+        run: dotnet test grp-dialer/tests/GrpDialer.Tests -c Release
       - name: Publish (single-file, self-contained, win-x64)
         run: >
           dotnet publish grp-dialer/src/GrpDialer/GrpDialer.csproj
@@ -44,6 +46,12 @@ jobs:
           $hash = (Get-FileHash grp-dialer/publish/GrpDialer.exe -Algorithm SHA256).Hash
           $notes = @"
           GRP Dialer for Windows 10/11. Controls a Grandstream GRP2634 over its CTI API: dial, answer, hang up.
+
+          What's new in 1.1:
+          - Call queue: while on a call, type numbers and press Enter to line them up. When the call ends, the next one dials automatically after a short countdown. Pause, Resume, Clear, or remove single numbers.
+          - New light design matching OTC Monitor: green header, white cards, Roboto.
+          - Simpler screen: plain status words, keypad and technical details tucked into Settings.
+          - Sturdier: rides out a dropped poll, second launch brings the open window up, errors are logged instead of crashing.
 
           Download GrpDialer.exe and run it. No install or .NET runtime needed.
 

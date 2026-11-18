@@ -18,10 +18,12 @@ public sealed class Settings
     public bool GlobalNumpadEnter { get; set; } = true;
     public bool PopOnIncoming { get; set; } = true;
     public bool AlwaysOnTop { get; set; }
+    public bool ShowKeypad { get; set; }
+    public int QueueDelaySeconds { get; set; } = 3;
     public double? Left { get; set; }
     public double? Top { get; set; }
 
-    private static readonly string Dir =
+    public static readonly string Dir =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GrpDialer");
     private static readonly string FilePath = Path.Combine(Dir, "settings.json");
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
@@ -52,20 +54,29 @@ public sealed class Settings
     [JsonIgnore]
     public bool IsConfigured => !string.IsNullOrWhiteSpace(PhoneHost);
 
+    public static int ClampDelay(int seconds) => Math.Clamp(seconds, 0, 60);
+
     public static Settings Load()
     {
         try
         {
             if (File.Exists(FilePath))
-                return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? new Settings();
+            {
+                var s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? new Settings();
+                s.QueueDelaySeconds = ClampDelay(s.QueueDelaySeconds);
+                return s;
+            }
         }
         catch { /* corrupt file: fall back to defaults */ }
         return new Settings();
     }
 
+    /// <summary>Writes via a temp file so a crash mid-save can't leave a truncated settings file.</summary>
     public void Save()
     {
         Directory.CreateDirectory(Dir);
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(this, JsonOpts));
+        var tmp = FilePath + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(this, JsonOpts));
+        File.Move(tmp, FilePath, overwrite: true);
     }
 }

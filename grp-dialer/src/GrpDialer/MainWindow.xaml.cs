@@ -1,7 +1,5 @@
 using System.ComponentModel;
-using System.Globalization;
 using System.Net.Http;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -11,31 +9,45 @@ using GrpDialer.Services;
 
 namespace GrpDialer;
 
+public sealed record QueueRow(int Index, string Position, string Display);
+
 public partial class MainWindow : Window
 {
-    private readonly Settings _settings = Settings.Load();
-    private readonly DispatcherTimer _poll = new() { Interval = TimeSpan.FromSeconds(1) };
-    private readonly NumpadEnterHook _hook;
-    private GrandstreamClient? _client;
+    private static readonly TimeSpan PollFast = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan PollSlow = TimeSpan.FromSeconds(3);
+    /// <summary>Failed polls in a row before the phone is shown as offline (rides out a dropped packet).</summary>
+    private const int OfflineAfterFailures = 2;
 
+    private readonly Settings _settings = Settings.Load();
+    private readonly DispatcherTimer _poll = new() { Interval = PollFast };
+    private readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromMilliseconds(250) };
+    private readonly NumpadEnterHook _hook;
+    private readonly CallQueue _queue = new();
+
+    private GrandstreamClient? _client;
+    private int _clientGen;              // bumps when settings change, so stale polls are ignored
     private LineStatus _status = LineStatus.Offline;
+    private bool _everConnected;
+    private int _failures;
+    private string _connError = "";
     private DateTime? _busySince;
     private DateTime _lastDialAt = DateTime.MinValue;
     private string _lastNumber = "";
     private bool _polling;
-    private bool _busy;          // a user command is in flight
+    private bool _busy;                  // a user command is in flight
+    private Action? _msgAction;
 
     public MainWindow()
     {
         InitializeComponent();
 
         _hook = new NumpadEnterHook(() => IsActive);
-        _hook.Pressed += () => Dispatcher.BeginInvoke(new Action(OnGlobalNumpadEnter));
+        _hook.Pressed += () => Dispatcher.BeginInvoke(new Action(BringUp));
 
         if (_settings.Left is double l && _settings.Top is double t &&
             l >= SystemParameters.VirtualScreenLeft && t >= SystemParameters.VirtualScreenTop &&
-            l < SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth - 50 &&
-            t < SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight - 50)
+            l < SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth - 80 &&
+            t < SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight - 80)
         {
             WindowStartupLocation = WindowStartupLocation.Manual;
             Left = l;
@@ -46,33 +58,72 @@ public partial class MainWindow : Window
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
         }
 
+        // Never taller than the screen (the body scrolls instead), and keep the bottom edge on screen as it grows.
+        MaxHeight = SystemParameters.WorkArea.Height;
+        SizeChanged += (_, _) =>
+        {
+            var wa = SystemParameters.WorkArea;
+            if (WindowState == WindowState.Normal && Top + ActualHeight > wa.Bottom && Top > wa.Top)
+                Top = Math.Max(wa.Top, wa.Bottom - ActualHeight);
+        };
+
+        var v = typeof(MainWindow).Assembly.GetName().Version;
+        VersionText.Text = v is null ? "GRP Dialer" : $"GRP Dialer {v.Major}.{v.Minor}.{v.Build}";
+
         _poll.Tick += async (_, _) => await Poll();
-        Loaded += (_, _) => ApplySettings(openSettingsIfEmpty: true);
+        _tick.Tick += (_, _) => OnTick();
+        _queue.Changed += RenderQueue;
+        Loaded += (_, _) =>
+        {
+            ApplySettings(openSettingsIfEmpty: true);
+            _tick.Start();
+        };
     }
 
-    // ---------- Settings ----------
+    /// <summary>Numpad Enter from another app, or a second copy of the app was started.</summary>
+    public void BringUp()
+    {
+        if (SettingsView.Visibility == Visibility.Visible && _settings.IsConfigured) ShowSettings(false);
+        WindowFocus.ForceForeground(this);
+        FocusDialer();
+    }
+
+    // ================= Settings =================
 
     private void ApplySettings(bool openSettingsIfEmpty = false)
     {
         Topmost = _settings.AlwaysOnTop;
+        Keypad.Visibility = _settings.ShowKeypad ? Visibility.Visible : Visibility.Collapsed;
+        KeypadBtnText.Text = _settings.ShowKeypad ? "Hide keypad" : "Keypad";
+        _queue.Delay = TimeSpan.FromSeconds(_settings.QueueDelaySeconds);
 
-        if (_settings.GlobalNumpadEnter) _hook.Start(); else _hook.Stop();
+        try { if (_settings.GlobalNumpadEnter) _hook.Start(); else _hook.Stop(); }
+        catch { /* hook unavailable: the in-window keys still work */ }
 
+        _clientGen++;
         _client?.Dispose();
         _client = _settings.IsConfigured
             ? new GrandstreamClient(_settings.PhoneHost, _settings.UseHttps, _settings.Password)
             : null;
+        _status = LineStatus.Offline;
+        _everConnected = false;
+        _failures = 0;
+        _connError = "";
+        _busySince = null;
 
         if (_client is null)
         {
             _poll.Stop();
-            SetConnection(null, "Not configured");
+            ShowMessage("Add your phone's address to start calling.", info: true, "Set up", () => ShowSettings(true));
+            Render();
             if (openSettingsIfEmpty) ShowSettings(true);
             return;
         }
 
-        SetConnection(null, "Connecting...");
+        ShowMessage(null);
+        _poll.Interval = PollFast;
         _poll.Start();
+        Render();
         _ = Poll();
         FocusDialer();
     }
@@ -81,7 +132,9 @@ public partial class MainWindow : Window
     {
         DialerView.Visibility = show ? Visibility.Collapsed : Visibility.Visible;
         SettingsView.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        SettingsBtn.Content = show ? "Dialer" : "Settings";
+        HeaderTitle.Text = show ? "Settings" : "GRP Dialer";
+        SettingsGlyph.Text = show ? "" : "";
+        SettingsBtn.ToolTip = show ? "Back to dialer" : "Settings";
         SettingsMsg.Visibility = Visibility.Collapsed;
 
         if (show)
@@ -92,8 +145,15 @@ public partial class MainWindow : Window
             GlobalKeyCheck.IsChecked = _settings.GlobalNumpadEnter;
             PopCheck.IsChecked = _settings.PopOnIncoming;
             TopCheck.IsChecked = _settings.AlwaysOnTop;
-            HostBox.Focus();
-            HostBox.SelectAll();
+            KeypadCheck.IsChecked = _settings.ShowKeypad;
+            DelayBox.Text = _settings.QueueDelaySeconds.ToString();
+            SetAdvanced(false);
+            SetTestResult(null, "");
+            Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+            {
+                HostBox.Focus();
+                HostBox.SelectAll();
+            }));
         }
         else
         {
@@ -101,88 +161,131 @@ public partial class MainWindow : Window
         }
     }
 
-    private bool ReadHost(out string host)
-    {
-        host = HostBox.Text.Trim();
-        if (host.Length > 0) return true;
-        SettingsMessage("Enter the phone's IP address.", error: true);
-        return false;
-    }
-
-    private void Save_Click(object sender, RoutedEventArgs e) => SaveSettings();
-
     private void SaveSettings()
     {
-        if (!ReadHost(out var host)) return;
+        var host = HostBox.Text.Trim();
+        if (host.Length == 0) { SettingsError("Enter the phone's address."); return; }
+        if (!int.TryParse(DelayBox.Text.Trim(), out var delay) || delay < 0 || delay > 60)
+        {
+            SetAdvanced(true);
+            SettingsError("Seconds before the next queued call must be between 0 and 60.");
+            return;
+        }
+
         _settings.PhoneHost = host;
         _settings.Password = PasswordBox.Password;
         _settings.UseHttps = HttpsCheck.IsChecked == true;
         _settings.GlobalNumpadEnter = GlobalKeyCheck.IsChecked == true;
         _settings.PopOnIncoming = PopCheck.IsChecked == true;
         _settings.AlwaysOnTop = TopCheck.IsChecked == true;
-        _settings.Save();
+        _settings.ShowKeypad = KeypadCheck.IsChecked == true;
+        _settings.QueueDelaySeconds = delay;
+        try { _settings.Save(); }
+        catch (Exception ex) { SettingsError("Couldn't save settings: " + ex.Message); return; }
+
         ShowSettings(false);
         ApplySettings();
     }
 
-    private async void Test_Click(object sender, RoutedEventArgs e)
-    {
-        if (!ReadHost(out var host)) return;
-        SettingsMessage("Testing...", error: false);
-        using var test = new GrandstreamClient(host, HttpsCheck.IsChecked == true, PasswordBox.Password);
-        try
-        {
-            var s = await test.GetStatus();
-            SettingsMessage($"Connected. Line state: {s.RawState}.", error: false);
-        }
-        catch (Exception ex)
-        {
-            SettingsMessage(Friendly(ex), error: true);
-        }
-    }
-
-    private void Cancel_Click(object sender, RoutedEventArgs e)
-    {
-        if (_settings.IsConfigured) ShowSettings(false);
-        else Close();
-    }
-
-    private void SettingsMessage(string text, bool error)
+    private void SettingsError(string text)
     {
         SettingsMsg.Text = text;
-        SettingsMsg.Foreground = (Brush)FindResource(error ? "Danger" : "TextDim");
         SettingsMsg.Visibility = Visibility.Visible;
     }
 
-    private void Settings_Click(object sender, RoutedEventArgs e)
+    private async void Test_Click(object sender, RoutedEventArgs e)
     {
-        bool open = SettingsView.Visibility != Visibility.Visible;
-        if (!open && !_settings.IsConfigured) return;
-        ShowSettings(open);
+        var host = HostBox.Text.Trim();
+        if (host.Length == 0) { SettingsError("Enter the phone's address."); return; }
+        SettingsMsg.Visibility = Visibility.Collapsed;
+        TestBtn.IsEnabled = false;
+        SetTestResult(null, "Testing…");
+        try
+        {
+            using var test = new GrandstreamClient(host, HttpsCheck.IsChecked == true, PasswordBox.Password);
+            await test.GetStatus();
+            SetTestResult(true, "Connected");
+        }
+        catch (Exception ex)
+        {
+            SetTestResult(false, Friendly(ex));
+        }
+        finally
+        {
+            TestBtn.IsEnabled = true;
+        }
     }
 
-    // ---------- Polling ----------
+    private void SetTestResult(bool? ok, string text)
+    {
+        TestText.Text = text;
+        TestText.Foreground = Res(ok == false ? "DangerInk" : ok == true ? "OkInk" : "Muted");
+        TestDot.Visibility = ok is null ? Visibility.Collapsed : Visibility.Visible;
+        TestDot.Fill = Res(ok == true ? "OkEdge" : "Danger");
+    }
+
+    private void SetAdvanced(bool open)
+    {
+        AdvancedPanel.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+        AdvancedGlyph.Text = open ? "" : "";
+    }
+
+    private void Advanced_Click(object sender, RoutedEventArgs e) =>
+        SetAdvanced(AdvancedPanel.Visibility != Visibility.Visible);
+
+    private void Save_Click(object sender, RoutedEventArgs e) => SaveSettings();
+    private void Cancel_Click(object sender, RoutedEventArgs e) => ShowSettings(false);
+
+    private void Settings_Click(object sender, RoutedEventArgs e) =>
+        ShowSettings(SettingsView.Visibility != Visibility.Visible);
+
+    private void KeypadToggle_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.ShowKeypad = !_settings.ShowKeypad;
+        Keypad.Visibility = _settings.ShowKeypad ? Visibility.Visible : Visibility.Collapsed;
+        KeypadBtnText.Text = _settings.ShowKeypad ? "Hide keypad" : "Keypad";
+        TrySave();
+        FocusDialer(selectAll: false);
+    }
+
+    private void TrySave()
+    {
+        try { _settings.Save(); } catch { /* best effort */ }
+    }
+
+    // ================= Polling =================
 
     private async Task Poll()
     {
-        if (_polling || _client is null) return;
+        var c = _client;
+        int gen = _clientGen;
+        if (_polling || c is null) return;
         _polling = true;
         try
         {
-            var s = await _client.GetStatus();
-            SetConnection(true, _settings.PhoneHost);
+            var s = await c.GetStatus();
+            if (gen != _clientGen) return;
+            _everConnected = true;
+            _failures = 0;
+            _connError = "";
+            _poll.Interval = PollFast;
             UpdateStatus(s);
         }
         catch (Exception ex)
         {
-            SetConnection(false, Friendly(ex));
-            UpdateStatus(LineStatus.Offline);
+            if (gen != _clientGen) return;
+            _connError = Friendly(ex);
+            _failures++;
+            if (_failures >= OfflineAfterFailures)
+            {
+                _poll.Interval = PollSlow;
+                UpdateStatus(LineStatus.Offline);
+            }
         }
         finally
         {
             _polling = false;
         }
-        TickTimer();
     }
 
     private void UpdateStatus(LineStatus s)
@@ -194,8 +297,8 @@ public partial class MainWindow : Window
         if (isBusy && !wasBusy)
         {
             _busySince = DateTime.Now;
-            // A call that this app did not just place: someone is calling in, or the
-            // handset was lifted. Either way, put the controls in front of the user.
+            // A call this app did not just place: someone is calling in, or the handset
+            // was lifted. Put the controls in front of the user.
             bool placedByUs = DateTime.Now - _lastDialAt < TimeSpan.FromSeconds(10);
             if (!placedByUs)
             {
@@ -203,62 +306,236 @@ public partial class MainWindow : Window
                 else WindowFocus.Flash(this);
             }
         }
-        if (!isBusy)
-        {
-            _busySince = null;
-            if (wasBusy && s.Online) NumberBox.Clear();
-        }
+        if (!isBusy) _busySince = null;
 
         Render();
     }
 
+    /// <summary>Runs 4x a second: call timer, queue countdown.</summary>
+    private void OnTick()
+    {
+        TimerText.Text = _busySince is DateTime since ? Elapsed(DateTime.Now - since) : "";
+
+        if (_client is not null)
+        {
+            bool hold = _busy
+                        || PhoneNumber.Normalize(NumberBox.Text).Length > 0
+                        || SettingsView.Visibility == Visibility.Visible;
+            var next = _queue.Tick(_status.Online, _status.Idle, hold, DateTime.Now);
+            if (next is not null) _ = Dial(next, fromQueue: true);
+        }
+        RenderQueueStatus();
+    }
+
+    private static string Elapsed(TimeSpan t) =>
+        t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
+
+    // ================= Rendering =================
+
+    private Brush Res(string key) => (Brush)FindResource(key);
+
     private void Render()
     {
         var s = _status;
+        var phase = CallPhases.From(s);
         bool busy = s.Online && !s.Idle;
+        bool configured = _client is not null;
+        bool hasText = PhoneNumber.Normalize(NumberBox.Text).Length > 0;
 
-        StateText.Text = !s.Online ? "Offline" : TitleCase(s.RawState);
-        var (fg, bg, border) = busy ? ("Success", "SuccessBg", "SuccessBorder") : ("TextDim", "BgUi", "Border");
-        StateText.Foreground = (Brush)FindResource(fg);
-        StateBadge.Background = (Brush)FindResource(bg);
-        StateBadge.BorderBrush = (Brush)FindResource(border);
+        // Header: one plain-words connection line. Details only in the tooltip.
+        if (!configured) SetConnection(null, "Not set up", null);
+        else if (s.Online) SetConnection(true, "Phone connected", _settings.PhoneHost);
+        else if (!_everConnected && _connError.Length == 0) SetConnection(null, "Connecting…", _settings.PhoneHost);
+        else SetConnection(false, "Phone offline", $"{_settings.PhoneHost}: {_connError}");
+
+        // Call card
+        string label = !configured ? "Not set up" : !_everConnected && !s.Online && _connError.Length == 0
+            ? "Connecting" : CallPhases.Label(phase);
+        var (bg, fg) = !configured ? ("NeutralBg", "Muted") : phase switch
+        {
+            CallPhase.Idle => ("BrandLight", "Brand"),
+            CallPhase.Offline => _connError.Length == 0 ? ("NeutralBg", "Muted") : ("DangerBg", "DangerInk"),
+            CallPhase.Incoming or CallPhase.OnHold => ("WarnBg", "WarnInk"),
+            _ => ("OkBg", "OkInk"),
+        };
+        StateText.Text = label;
+        StateText.Foreground = Res(fg);
+        StatePill.Background = Res(bg);
+        StatePill.ToolTip = busy && s.RawState.Length > 0 ? $"Phone reports \"{s.RawState}\"" : null;
 
         string number = s.RemoteNumber.Length > 0 ? s.RemoteNumber
             : busy && DateTime.Now - _lastDialAt < TimeSpan.FromMinutes(5) ? _lastNumber : "";
-        RemoteName.Text = !busy ? "No active call"
-            : s.RemoteName.Length > 0 ? s.RemoteName
-            : number.Length > 0 ? number
-            : "In use";
-        RemoteNumber.Text = busy && s.RemoteName.Length > 0 ? number : "";
+        if (busy)
+        {
+            RemoteName.Text = s.RemoteName.Length > 0 ? s.RemoteName
+                : number.Length > 0 ? PhoneNumber.Display(number)
+                : "On a call";
+            RemoteNumber.Text = s.RemoteName.Length > 0 ? PhoneNumber.Display(number) : "";
+        }
+        else if (!configured)
+        {
+            RemoteName.Text = "No phone yet";
+            RemoteNumber.Text = "";
+        }
+        else if (!s.Online && _connError.Length > 0)
+        {
+            RemoteName.Text = "Can't reach the phone";
+            RemoteNumber.Text = "Trying again every few seconds";
+        }
+        else
+        {
+            RemoteName.Text = "No active call";
+            RemoteNumber.Text = "";
+        }
         RemoteNumber.Visibility = RemoteNumber.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        PrimaryBtn.Content = busy ? "Answer" : "Call";
-        PrimaryBtn.IsEnabled = s.Online && !_busy && (busy || Normalize(NumberBox.Text).Length > 0);
-        HangUpBtn.IsEnabled = s.Online && !_busy && busy;
+        // Entry
+        NumberBox.Tag = busy ? "Type a number to queue it" : "Type a number";
+        QueueBtn.Visibility = busy && hasText ? Visibility.Visible : Visibility.Collapsed;
+        QueueBtn.IsEnabled = !_busy;
+
+        // Actions
+        bool canAnswer = busy && CallPhases.CanAnswer(phase);
+        CallBtn.Visibility = busy ? Visibility.Collapsed : Visibility.Visible;
+        AnswerBtn.Visibility = canAnswer ? Visibility.Visible : Visibility.Collapsed;
+        HangUpBtn.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        Grid.SetColumn(HangUpBtn, canAnswer ? 2 : 0);
+        Grid.SetColumnSpan(HangUpBtn, canAnswer ? 1 : 3);
+
+        CallBtnText.Text = !hasText && _queue.Count > 0 ? "Call next" : "Call";
+        CallBtn.IsEnabled = s.Online && !_busy && (hasText || _queue.Count > 0);
+        AnswerBtn.IsEnabled = !_busy;
+        HangUpBtn.IsEnabled = !_busy;
+
+        TipText.Text = busy
+            ? (hasText ? "Enter adds it to the queue" : canAnswer ? "Enter answers · type to queue" : "Enter hangs up · type to queue")
+            : "Enter calls · Esc clears";
+
+        RenderQueueStatus();
     }
 
-    private void TickTimer()
+    private void SetConnection(bool? ok, string text, string? detail)
     {
-        TimerText.Text = _busySince is DateTime since ? (DateTime.Now - since).ToString(@"m\:ss") : "";
-    }
-
-    private void SetConnection(bool? ok, string text)
-    {
-        ConnDot.Fill = (Brush)FindResource(ok switch { true => "Success", false => "Danger", _ => "TextFaint" });
+        ConnDot.Fill = ok switch
+        {
+            true => Brushes.White,
+            false => Res("Danger"),
+            _ => Res("BrandSub"),
+        };
         ConnText.Text = text;
+        ConnText.Foreground = ok == true ? Brushes.White : Res("BrandSub");
+        ConnPanel.ToolTip = detail;
     }
 
-    private static string TitleCase(string raw) =>
-        raw.Length == 0 ? "" : CultureInfo.CurrentCulture.TextInfo.ToTitleCase(raw.ToLowerInvariant());
+    private void RenderQueue()
+    {
+        int n = _queue.Count;
+        QueuePanel.Visibility = n > 0 ? Visibility.Visible : Visibility.Collapsed;
+        QueueTitle.Text = $"Up next · {n}";
+        QueueList.ItemsSource = _queue.Items
+            .Select((num, i) => new QueueRow(i, $"{i + 1}", PhoneNumber.Display(num)))
+            .ToList();
+        Render();
+    }
 
-    // ---------- Actions ----------
+    private void RenderQueueStatus()
+    {
+        if (_queue.Count == 0) return;
+        PauseBtn.Content = _queue.Paused ? "Resume" : "Pause";
+
+        string text;
+        if (_queue.DialAt is DateTime at)
+        {
+            int secs = Math.Max(1, (int)Math.Ceiling((at - DateTime.Now).TotalSeconds));
+            text = $"Calling {PhoneNumber.Display(_queue.Next)} in {secs}s";
+        }
+        else
+        {
+            text = _queue.Waiting switch
+            {
+                QueueWait.OnCall => "Starts when this call ends",
+                QueueWait.Paused => "Paused",
+                QueueWait.Hold => _busy ? "Waiting" : "Waiting: clear the box to continue",
+                QueueWait.Offline => "Waiting for the phone",
+                _ => _queue.Delay == TimeSpan.Zero ? "Calling now" : "",
+            };
+        }
+        QueueStatus.Text = text;
+        QueueStatus.Foreground = Res(_queue.DialAt is not null ? "Brand" : "Muted");
+        QueueStatus.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ShowMessage(string? text, bool info = false, string? actionLabel = null, Action? action = null)
+    {
+        MessageText.Text = text ?? "";
+        MsgPanel.Visibility = string.IsNullOrEmpty(text) ? Visibility.Collapsed : Visibility.Visible;
+        MsgPanel.Background = Res(info ? "BrandLight" : "DangerBg");
+        MessageText.Foreground = Res(info ? "Ink" : "DangerInk");
+        _msgAction = action;
+        MessageAction.Content = actionLabel;
+        MessageAction.Visibility = actionLabel is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void MessageAction_Click(object sender, RoutedEventArgs e) => _msgAction?.Invoke();
+
+    // ================= Actions =================
 
     /// <summary>
-    /// Enter: idle -> call. In use -> acceptcall; the phone answers {"response":"error"}
-    /// when there is nothing to accept, in which case the call is ended instead.
+    /// Enter. Idle: call the typed number, or the next queued one.
+    /// On a call: queue the typed number; with nothing typed, answer (or hang up if there's nothing to answer).
     /// </summary>
-    private Task EnterAction() =>
-        _status.Online && !_status.Idle ? Run(AnswerOrHangUp) : Call();
+    private async Task EnterAction()
+    {
+        var typed = PhoneNumber.Normalize(NumberBox.Text);
+        bool busy = _status.Online && !_status.Idle;
+        bool callStarting = DateTime.Now - _lastDialAt < TimeSpan.FromSeconds(3) && !busy;
+
+        if (busy || callStarting)
+        {
+            if (typed.Length > 0) AddToQueue(typed);
+            else if (busy) await Run(AnswerOrHangUp);
+            return;
+        }
+        if (typed.Length > 0) await Dial(typed, fromQueue: false);
+        else if (_queue.Count > 0) await CallNextNow();
+        else FocusDialer();
+    }
+
+    private void AddToQueue(string number)
+    {
+        if (_queue.Add(number)) NumberBox.Clear();
+        FocusDialer();
+    }
+
+    private async Task CallNextNow()
+    {
+        var next = _queue.TakeNext();
+        if (next is not null) await Dial(next, fromQueue: true);
+    }
+
+    private async Task Dial(string number, bool fromQueue)
+    {
+        _lastNumber = number;
+        _lastDialAt = DateTime.Now;
+        _queue.NoteDialed(DateTime.Now);
+
+        var error = await Run(async c => await c.Dial(number)
+            ? null
+            : "The phone didn't accept the call. Setup help is in Settings.");
+
+        if (error is null)
+        {
+            if (!fromQueue) NumberBox.Clear();
+            return;
+        }
+        _lastDialAt = DateTime.MinValue;
+        _queue.NoteDialFailed();
+        if (fromQueue)
+        {
+            _queue.PutBack(number);
+            if (error.Length > 0) ShowMessage(error + " The queue is paused.");
+        }
+    }
 
     private static async Task<string?> AnswerOrHangUp(GrandstreamClient c)
     {
@@ -270,65 +547,83 @@ public partial class MainWindow : Window
     {
         if (await c.Operation("endcall")) return null;
         if (await c.Operation("cancel")) return null;
-        return "Phone refused to hang up.";
+        return "The phone wouldn't hang up.";
     }
 
     private static async Task<string?> Answer(GrandstreamClient c) =>
-        await c.Operation("acceptcall") ? null : "No incoming call to answer.";
+        await c.Operation("acceptcall") ? null : "There's no incoming call to answer.";
 
-    private Task Call()
+    /// <summary>
+    /// Runs one phone command. Returns null on success, else the error (already shown);
+    /// "" if it couldn't start because another command is in flight.
+    /// </summary>
+    private async Task<string?> Run(Func<GrandstreamClient, Task<string?>> action)
     {
-        var number = Normalize(NumberBox.Text);
-        if (number.Length == 0) { FocusDialer(); return Task.CompletedTask; }
-        _lastNumber = number;
-        _lastDialAt = DateTime.Now;
-        return Run(async c => await c.Dial(number)
-            ? null
-            : "Phone refused the call. On GRP260x, enable Click-To-Dial under Phone Settings > Call Settings.");
-    }
-
-    /// <summary>Runs a phone command. The command returns an error message, or null on success.</summary>
-    private async Task Run(Func<GrandstreamClient, Task<string?>> action)
-    {
-        if (_client is null || _busy) return;
+        var c = _client;
+        if (c is null || _busy) return "";
         _busy = true;
+        ShowMessage(null);
         Render();
-        ShowError(null);
+        string? error;
         try
         {
-            ShowError(await action(_client));
+            error = await action(c);
         }
         catch (Exception ex)
         {
-            ShowError(Friendly(ex));
+            error = Friendly(ex);
         }
         finally
         {
             _busy = false;
         }
+        if (error is not null) ShowMessage(error);
         await Poll();
+        Render();
+        return error;
     }
 
-    private async void Primary_Click(object sender, RoutedEventArgs e)
+    private async void Call_Click(object sender, RoutedEventArgs e)
     {
-        if (_status.Online && !_status.Idle) await Run(Answer);
-        else await Call();
+        var typed = PhoneNumber.Normalize(NumberBox.Text);
+        if (typed.Length > 0) await Dial(typed, fromQueue: false);
+        else await CallNextNow();
     }
 
+    private async void Answer_Click(object sender, RoutedEventArgs e) => await Run(Answer);
     private async void HangUp_Click(object sender, RoutedEventArgs e) => await Run(HangUp);
+
+    private void Queue_Click(object sender, RoutedEventArgs e)
+    {
+        var typed = PhoneNumber.Normalize(NumberBox.Text);
+        if (typed.Length > 0) AddToQueue(typed);
+    }
+
+    private void Pause_Click(object sender, RoutedEventArgs e)
+    {
+        _queue.Paused = !_queue.Paused;
+        if (!_queue.Paused) ShowMessage(null);
+        RenderQueueStatus();
+        FocusDialer(selectAll: false);
+    }
+
+    private void ClearQueue_Click(object sender, RoutedEventArgs e)
+    {
+        _queue.Clear();
+        FocusDialer(selectAll: false);
+    }
+
+    private void RemoveQueued_Click(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext is QueueRow row) _queue.RemoveAt(row.Index);
+        FocusDialer(selectAll: false);
+    }
 
     private void Key_Click(object sender, RoutedEventArgs e)
     {
         var key = (string)((Button)sender).Content;
         NumberBox.Text += key;
         FocusDialer(selectAll: false);
-    }
-
-    private void OnGlobalNumpadEnter()
-    {
-        if (SettingsView.Visibility == Visibility.Visible) ShowSettings(false);
-        WindowFocus.ForceForeground(this);
-        FocusDialer();
     }
 
     private void FocusDialer(bool selectAll = true)
@@ -348,7 +643,7 @@ public partial class MainWindow : Window
         if (SettingsView.Visibility == Visibility.Visible)
         {
             if (e.Key == Key.Enter) { e.Handled = true; SaveSettings(); }
-            else if (e.Key == Key.Escape && _settings.IsConfigured) { e.Handled = true; ShowSettings(false); }
+            else if (e.Key == Key.Escape) { e.Handled = true; ShowSettings(false); }
             return;
         }
 
@@ -374,42 +669,32 @@ public partial class MainWindow : Window
         }
     }
 
-    private void NumberBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        NumberHint.Visibility = NumberBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-        Render();
-    }
-
-    private void ShowError(string? text)
-    {
-        ErrorText.Text = text ?? "";
-        ErrorText.Visibility = string.IsNullOrEmpty(text) ? Visibility.Collapsed : Visibility.Visible;
-    }
-
-    /// <summary>Keep digits, *, # and a leading +. Pasted "(705) 555-1234" becomes "7055551234".</summary>
-    private static string Normalize(string raw)
-    {
-        var s = Regex.Replace(raw.Trim(), @"[^\d*#+]", "");
-        return s.Length > 0 ? s[0] + s[1..].Replace("+", "") : s;
-    }
+    private void NumberBox_TextChanged(object sender, TextChangedEventArgs e) => Render();
 
     private static string Friendly(Exception ex) => ex switch
     {
         PhoneException pe => pe.Message,
-        TaskCanceledException => "Phone did not respond.",
+        TaskCanceledException => "The phone didn't respond.",
         HttpRequestException => "Can't reach the phone.",
-        _ => ex.Message,
+        ObjectDisposedException => "Cancelled.",
+        UriFormatException => "That phone address isn't valid.",
+        _ => "Something went wrong: " + ex.Message,
     };
 
-    // ---------- Window chrome ----------
+    // ================= Window chrome =================
 
     private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
+    private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ButtonState == MouseButtonState.Pressed) DragMove();
+    }
+
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonDown(e);
-        if (e.ButtonState == MouseButtonState.Pressed && e.OriginalSource is Border or Grid or StackPanel)
+        if (!e.Handled && e.ButtonState == MouseButtonState.Pressed && e.OriginalSource is Border or Grid or StackPanel)
             DragMove();
     }
 
@@ -419,9 +704,10 @@ public partial class MainWindow : Window
         {
             _settings.Left = Left;
             _settings.Top = Top;
-            try { _settings.Save(); } catch { /* best effort */ }
+            TrySave();
         }
         _poll.Stop();
+        _tick.Stop();
         _hook.Dispose();
         _client?.Dispose();
         base.OnClosing(e);
