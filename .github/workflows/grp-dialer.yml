@@ -47,8 +47,12 @@ jobs:
           $notes = @"
           GRP Dialer for Windows 10/11. Controls a Grandstream GRP2634 over its CTI API: dial, answer, hang up.
 
-          What's new in 1.5:
-          - The mini call bar is for incoming calls only: green phone, number, "Incoming Call" (plus any PropelRx match), Answer gently glowing, Decline. When answered the phone turns orange, the bar fades and the dialer opens without taking focus (it tucks away again after the call if you didn't touch it).
+          What's new in 1.5.1:
+          - The incoming call bar shows only "Incoming Call"; PropelRx matches stay in the main dialer.
+          - "On hold" now reads "Hold" (e.g. Hold 0:42), and the hold button stays white.
+
+          New in 1.5:
+          - The mini call bar is for incoming calls only: green phone, number, "Incoming Call", Answer gently glowing, Decline. When answered the phone turns orange, the bar fades and the dialer opens without taking focus (it tucks away again after the call if you didn't touch it).
           - Hold: a small square button beside Hang up (pause icon; play to resume).
           - Call time sits in the state badge ("Connected 1:23") on the caller's line.
           - Key hints read [ENTER] Call / Answer / Hang up / Add to queue; on a call the box says "Add number to queue".

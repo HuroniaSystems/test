@@ -190,7 +190,7 @@ public partial class MainWindow : Window
         string who = s.RemoteNumber.Length > 0 ? PhoneNumber.Display(s.RemoteNumber)
             : s.RemoteName.Length > 0 ? s.RemoteName
             : "Unknown number";
-        string caption = "Incoming Call" + (_callerCaption is null ? "" : " · " + _callerCaption);
+        const string caption = "Incoming Call";   // PropelRx matches stay in the main dialer
         _bar.Update(who, s.RemoteName, caption, enabled: !_busy);
 
         // Position (measure first if it hasn't been shown yet).
@@ -669,7 +669,6 @@ public partial class MainWindow : Window
         HoldBtn.IsEnabled = !_busy;
         HoldIcon.Data = onHold ? Icons.Play : Icons.Pause;
         HoldBtn.ToolTip = onHold ? "Resume" : "Hold";
-        if (onHold) HoldBtn.Background = Res("WarnBg"); else HoldBtn.ClearValue(BackgroundProperty);
 
         CallBtnText.Text = !hasText && _queue.Count > 0 ? "Call next" : "Call";
         CallBtn.IsEnabled = s.Online && !_busy && (hasText || _queue.Count > 0);

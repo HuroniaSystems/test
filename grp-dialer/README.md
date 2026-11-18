@@ -20,7 +20,7 @@ stay as typed.
 
 While a call rings in, a thin strip the same width as the dialer sits above the
 clock (or just above the dialer when it's open): a green phone, the caller's
-number, **Incoming Call** (plus any PropelRx match), a gently glowing
+number, **Incoming Call**, a gently glowing
 **Answer** and **Decline**. It stays while ringing, even when you click away,
 and never takes keyboard focus. Click the number to open the dialer.
 
@@ -31,7 +31,7 @@ it tucks away again when the call ends.
 ### During a call
 
 The state badge sits on the caller's line with the call time: **Connected
-1:23**, **On hold 0:42**. The small square button beside **Hang up** puts the
+1:23**, **Hold 0:42**. The small square button beside **Hang up** puts the
 call on hold (pause icon) and resumes it (play icon). The key hint under the
 buttons always says what Enter does right now: **[ENTER] Call**, **Answer**,
 **Hang up** or **Add to queue**.
@@ -127,7 +127,7 @@ GET /cgi-bin/api-phone_operation?passcode=PW&cmd=cancel
 ```
 
 The guide documents only `"idle"` as a line `state` value. Other state strings
-are matched loosely to plain labels (Incoming call, Calling, Connected, On hold);
+are matched loosely to plain labels (Incoming call, Calling, Connected, Hold);
 anything unrecognised shows as "On a call". The raw value is in the status
 pill's tooltip.
 

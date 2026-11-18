@@ -105,7 +105,7 @@ public static class CallPhases
         CallPhase.Incoming => "Incoming call",
         CallPhase.Calling => "Calling",
         CallPhase.Connected => "Connected",
-        CallPhase.OnHold => "On hold",
+        CallPhase.OnHold => "Hold",
         _ => "On a call",
     };
 
