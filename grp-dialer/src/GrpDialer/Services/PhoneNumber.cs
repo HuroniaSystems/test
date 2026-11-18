@@ -11,6 +11,56 @@ public static class PhoneNumber
         return s.Length > 0 ? s[0] + s[1..].Replace("+", "") : s;
     }
 
+    /// <summary>Longest number the box accepts (E.164 is 15 digits, plus a leading + or code).</summary>
+    public const int MaxChars = 16;
+
+    /// <summary>Characters the number box lets through: digits, * and # (phone codes), + for international.</summary>
+    public static bool IsAllowed(char c) => c is >= '0' and <= '9' or '*' or '#' or '+';
+
+    /// <summary>
+    /// Input mask for the number box: drops letters and stray symbols, and formats North
+    /// American numbers while they're typed. Short extensions stay as typed.
+    /// <code>
+    /// 201        -> 201
+    /// 7055551    -> 705-5551
+    /// 70555512   -> (705) 555-12
+    /// 7055551234 -> (705) 555-1234
+    /// 17055551234 -> 1 (705) 555-1234
+    /// </code>
+    /// Anything with *, #, + or more than 11 digits is shown cleaned but unformatted.
+    /// </summary>
+    public static string FormatAsYouType(string? raw)
+    {
+        var n = Normalize(raw);
+        if (n.Length > MaxChars) n = n[..MaxChars];
+        if (!Regex.IsMatch(n, @"^\d+$")) return n;
+        if (n[0] == '1' && n.Length is >= 8 and <= 11) return "1 " + Group(n[1..]);
+        return n.Length <= 10 ? Group(n) : n;
+    }
+
+    // 1-4 digits as typed, 5-7 as 555-1234, 8-10 as (705) 555-1234.
+    private static string Group(string d) => d.Length switch
+    {
+        <= 4 => d,
+        <= 7 => $"{d[..3]}-{d[3..]}",
+        _ => $"({d[..3]}) {d[3..6]}-{d[6..]}",
+    };
+
+    /// <summary>
+    /// Where the caret goes after <see cref="FormatAsYouType"/>: just after the same number of
+    /// digits as were before it, so typing in the middle doesn't throw the caret to the end.
+    /// </summary>
+    public static int MapCaret(string before, int caret, string after)
+    {
+        int keep = 0;
+        for (int i = 0; i < Math.Min(caret, before.Length); i++)
+            if (IsAllowed(before[i])) keep++;
+        if (keep == 0) return 0;
+        for (int i = 0; i < after.Length; i++)
+            if (IsAllowed(after[i]) && --keep == 0) return i + 1;
+        return after.Length;
+    }
+
     /// <summary>Readable form for North American numbers; anything else is shown as typed.</summary>
     public static string Display(string? number)
     {

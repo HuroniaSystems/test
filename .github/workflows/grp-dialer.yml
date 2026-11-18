@@ -47,7 +47,13 @@ jobs:
           $notes = @"
           GRP Dialer for Windows 10/11. Controls a Grandstream GRP2634 over its CTI API: dial, answer, hang up.
 
-          What's new in 1.2:
+          What's new in 1.3:
+          - Call bar: a thin strip the width of the dialer, above the clock, for every call. Ringing: green dot, number, Answer and Decline. Answered: orange dot, call time underneath, End. It stays up for the whole call, even when you click away, and never takes focus from what you're typing.
+          - Number box formats as you type, e.g. (705) 555-1234, and ignores letters. Short extensions stay as typed.
+          - Smaller placeholder text in the number box.
+          - Call time on the dialer counts from when the call was answered.
+
+          New in 1.2:
           - Lives in the tray by the clock, like OTC Monitor: no taskbar button. Click the tray icon to open the dialer above the taskbar; it hides when you click away (or press Esc / the X).
           - A queued call about to dial pops the dialer up (without stealing focus) so you can pause it.
           - Quit from the tray icon's right-click menu, or Settings > Advanced.

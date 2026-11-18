@@ -239,7 +239,6 @@
                             <StackPanel>
                                 <TextBlock Text="Options" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,6" />
                                 <CheckBox x:Name="GlobalKeyCheck" Content="Numpad Enter opens the dialer from any app" />
-                                <CheckBox x:Name="PopCheck" Content="Open the dialer when a call comes in" />
                                 <CheckBox x:Name="ClickAwayCheck" Content="Hide when I click away" />
                                 <CheckBox x:Name="KeypadCheck" Content="Show keypad" />
                             </StackPanel>

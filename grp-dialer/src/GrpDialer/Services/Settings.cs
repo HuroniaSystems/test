@@ -16,7 +16,6 @@ public sealed class Settings
     public bool UseHttps { get; set; }
     public string PasswordProtected { get; set; } = "";
     public bool GlobalNumpadEnter { get; set; } = true;
-    public bool PopOnIncoming { get; set; } = true;
     /// <summary>Hide the flyout when another window is clicked, like the taskbar's own flyouts.</summary>
     public bool HideOnClickAway { get; set; } = true;
     public bool ShowKeypad { get; set; }

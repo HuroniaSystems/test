@@ -172,6 +172,36 @@ public class PhoneNumberTests
     [InlineData("+447700900123", "+447700900123")]
     [InlineData("*69", "*69")]
     public void Display(string n, string expected) => Assert.Equal(expected, PhoneNumber.Display(n));
+
+    [Theory]
+    [InlineData("", "")]
+    [InlineData("7", "7")]
+    [InlineData("2001", "2001")]
+    [InlineData("70555", "705-55")]
+    [InlineData("7055551", "705-5551")]
+    [InlineData("70555512", "(705) 555-12")]
+    [InlineData("7055551234", "(705) 555-1234")]
+    [InlineData("(705) 555-1234", "(705) 555-1234")]
+    [InlineData("705.555.1234", "(705) 555-1234")]
+    [InlineData("17055551234", "1 (705) 555-1234")]
+    [InlineData("1705555", "170-5555")]
+    [InlineData("170555512", "1 (705) 555-12")]
+    [InlineData("70555512345", "70555512345")]
+    [InlineData("call 705-555-1234 now", "(705) 555-1234")]
+    [InlineData("abc", "")]
+    [InlineData("705 ABC 1", "7051")]
+    [InlineData("*69", "*69")]
+    [InlineData("+44 7700 900123", "+447700900123")]
+    [InlineData("12345678901234567890", "1234567890123456")]
+    public void FormatAsYouType(string raw, string expected) => Assert.Equal(expected, PhoneNumber.FormatAsYouType(raw));
+
+    [Theory]
+    [InlineData("70555512", 8, "(705) 555-12", 12)]     // typing at the end stays at the end
+    [InlineData("(705) 555-12", 2, "(705) 555-12", 2)]  // after the 7
+    [InlineData("(705) 5x55-12", 8, "(705) 555-12", 7)] // blocked letter: caret stays after the 5
+    [InlineData("705", 0, "705", 0)]
+    public void MapCaret(string before, int caret, string after, int expected) =>
+        Assert.Equal(expected, PhoneNumber.MapCaret(before, caret, after));
 }
 
 public class CallPhaseTests

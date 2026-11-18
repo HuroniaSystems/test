@@ -30,13 +30,15 @@ public partial class MainWindow : Window
     private bool _everConnected;
     private int _failures;
     private string _connError = "";
-    private DateTime? _busySince;
     private DateTime _lastDialAt = DateTime.MinValue;
     private string _lastNumber = "";
     private bool _polling;
     private bool _busy;                  // a user command is in flight
     private Action? _msgAction;
     private bool _wasCounting;           // queue countdown was showing last tick
+    private bool _formatting;            // the number box mask is rewriting the text
+    private DateTime? _activeSince;      // when the current call was answered / connected
+    private readonly CallBar _bar = new();
 
     // Tray flyout: anchored above the taskbar's notification area, like OTC Monitor.
     private const double Shadow = 12;    // transparent margin that holds the drop shadow
@@ -54,8 +56,24 @@ public partial class MainWindow : Window
         _hook = new NumpadEnterHook(() => IsActive);
         _hook.Pressed += () => Dispatcher.BeginInvoke(new Action(BringUp));
 
+        // Call bar: thin strip above the clock (or above the open dialer) for the whole call.
+        _bar.AnswerClicked += async () => await Run(Answer);
+        _bar.DeclineClicked += async () => await Run(HangUp);
+        _bar.OpenDialer += BringUp;
+        _bar.SizeChanged += (_, _) => RenderBar();
+
+        // Number box: digits, * # + only, formatted as typed; smaller placeholder than the number.
+        NumberBox.PreviewTextInput += (_, e) => e.Handled = !e.Text.All(PhoneNumber.IsAllowed);
+        NumberBox.PreviewKeyDown += NumberBox_PreviewKeyDown;
+        NumberBox.Loaded += (_, _) =>
+        {
+            NumberBox.ApplyTemplate();
+            if (NumberBox.Template.FindName("hint", NumberBox) is TextBlock hint) hint.FontSize = 14;
+        };
+
         // Flyout: no taskbar button, sits above the clock, keeps its bottom edge there as it grows.
         SizeChanged += (_, _) => { if (IsVisible) Place(); };
+        IsVisibleChanged += (_, _) => RenderBar();
         SystemParameters.StaticPropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(SystemParameters.WorkArea) && IsVisible) Dispatcher.BeginInvoke(Place);
@@ -105,6 +123,56 @@ public partial class MainWindow : Window
         }
         Left = wa.Right - Width + Shadow - Gap;
         Top = Math.Max(wa.Top - Shadow, wa.Bottom - h + Shadow - Gap);
+        RenderBar();
+    }
+
+    // ================= Call bar =================
+
+    /// <summary>
+    /// Shows the call bar while the line is busy: above the clock, or stacked just above the
+    /// dialer when that's open. If the open dialer leaves no room (tall Settings), the bar waits.
+    /// </summary>
+    private void RenderBar()
+    {
+        var s = _status;
+        if (!(s.Online && !s.Idle))
+        {
+            if (_bar.IsVisible) _bar.Hide();
+            return;
+        }
+
+        var phase = CallPhases.From(s);
+        bool ringing = phase == CallPhase.Incoming;
+        string number = s.RemoteNumber.Length > 0 ? s.RemoteNumber
+            : DateTime.Now - _lastDialAt < TimeSpan.FromMinutes(5) ? _lastNumber : "";
+        string who = number.Length > 0 ? PhoneNumber.Display(number)
+            : s.RemoteName.Length > 0 ? s.RemoteName
+            : "Unknown number";
+        string? caption = ringing ? null
+            : _activeSince is DateTime since ? (phase == CallPhase.OnHold ? "On hold · " : "") + Elapsed(DateTime.Now - since)
+            : phase == CallPhase.Calling ? "Calling…"
+            : null;
+        _bar.Update(who, s.RemoteName, ringing, caption, enabled: !_busy);
+
+        // Position (measure first if it hasn't been shown yet).
+        var wa = SystemParameters.WorkArea;
+        double h = _bar.ActualHeight;
+        if (h <= 0 && _bar.Content is FrameworkElement root)
+        {
+            root.Measure(new Size(_bar.Width, double.PositiveInfinity));
+            h = root.DesiredSize.Height;
+        }
+        double top = IsVisible
+            ? Top + 2 * Shadow - Gap - h            // card sits Gap above the dialer's card
+            : wa.Bottom - h + Shadow - Gap;         // card sits Gap above the taskbar
+        if (top < wa.Top - Shadow)
+        {
+            if (_bar.IsVisible) _bar.Hide();
+            return;
+        }
+        _bar.Left = wa.Right - _bar.Width + Shadow - Gap;
+        _bar.Top = top;
+        if (!_bar.IsVisible) _bar.Show();
     }
 
     /// <param name="activate">false shows it without taking focus from what the user is doing.</param>
@@ -174,7 +242,7 @@ public partial class MainWindow : Window
         _everConnected = false;
         _failures = 0;
         _connError = "";
-        _busySince = null;
+        _activeSince = null;
 
         if (_client is null)
         {
@@ -208,7 +276,6 @@ public partial class MainWindow : Window
             PasswordBox.Password = _settings.Password;
             HttpsCheck.IsChecked = _settings.UseHttps;
             GlobalKeyCheck.IsChecked = _settings.GlobalNumpadEnter;
-            PopCheck.IsChecked = _settings.PopOnIncoming;
             ClickAwayCheck.IsChecked = _settings.HideOnClickAway;
             KeypadCheck.IsChecked = _settings.ShowKeypad;
             DelayBox.Text = _settings.QueueDelaySeconds.ToString();
@@ -241,7 +308,6 @@ public partial class MainWindow : Window
         _settings.Password = PasswordBox.Password;
         _settings.UseHttps = HttpsCheck.IsChecked == true;
         _settings.GlobalNumpadEnter = GlobalKeyCheck.IsChecked == true;
-        _settings.PopOnIncoming = PopCheck.IsChecked == true;
         _settings.HideOnClickAway = ClickAwayCheck.IsChecked == true;
         _settings.ShowKeypad = KeypadCheck.IsChecked == true;
         _settings.QueueDelaySeconds = delay;
@@ -355,22 +421,15 @@ public partial class MainWindow : Window
 
     private void UpdateStatus(LineStatus s)
     {
-        bool wasBusy = _status.Online && !_status.Idle;
         bool isBusy = s.Online && !s.Idle;
         _status = s;
 
-        if (isBusy && !wasBusy)
-        {
-            _busySince = DateTime.Now;
-            // A call this app did not just place: someone is calling in, or the handset
-            // was lifted. Put the controls in front of the user.
-            bool placedByUs = DateTime.Now - _lastDialAt < TimeSpan.FromSeconds(10);
-            if (!placedByUs)
-            {
-                if (_settings.PopOnIncoming) ShowFlyout();
-            }
-        }
-        if (!isBusy) _busySince = null;
+        // Incoming calls show on the call bar (see RenderBar) instead of popping the whole dialer.
+        // Call time (bar and dialer) counts from the answer, not from the first ring.
+        var phase = CallPhases.From(s);
+        if (!isBusy) _activeSince = null;
+        else if (_activeSince is null && phase is CallPhase.Connected or CallPhase.OnHold or CallPhase.InUse)
+            _activeSince = DateTime.Now;
 
         Render();
     }
@@ -378,7 +437,8 @@ public partial class MainWindow : Window
     /// <summary>Runs 4x a second: call timer, queue countdown.</summary>
     private void OnTick()
     {
-        TimerText.Text = _busySince is DateTime since ? Elapsed(DateTime.Now - since) : "";
+        TimerText.Text = _activeSince is DateTime since ? Elapsed(DateTime.Now - since) : "";   // same clock as the call bar
+        if (_bar.IsVisible) RenderBar();
 
         if (_client is not null)
         {
@@ -484,6 +544,7 @@ public partial class MainWindow : Window
 
         RenderQueueStatus();
         RenderTray(label, busy ? RemoteName.Text : "");
+        RenderBar();
     }
 
     private void RenderTray(string label, string who)
@@ -757,7 +818,51 @@ public partial class MainWindow : Window
         }
     }
 
-    private void NumberBox_TextChanged(object sender, TextChangedEventArgs e) => Render();
+    /// <summary>Input mask: strip anything that isn't part of a number and format as typed.</summary>
+    private void NumberBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_formatting)
+        {
+            var text = NumberBox.Text;
+            var formatted = PhoneNumber.FormatAsYouType(text);
+            if (formatted != text)
+            {
+                int caret = PhoneNumber.MapCaret(text, NumberBox.CaretIndex, formatted);
+                _formatting = true;
+                NumberBox.Text = formatted;
+                NumberBox.CaretIndex = caret;
+                _formatting = false;
+            }
+        }
+        Render();
+    }
+
+    /// <summary>
+    /// Backspace / Delete next to a bracket, space or dash removes the neighbouring digit, so
+    /// the mask's punctuation never makes a key press look like it did nothing.
+    /// </summary>
+    private void NumberBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Back or Key.Delete) || NumberBox.SelectionLength > 0) return;
+        var text = NumberBox.Text;
+        int caret = NumberBox.CaretIndex;
+        int i = e.Key == Key.Back ? caret - 1 : caret;
+        if (i < 0 || i >= text.Length || PhoneNumber.IsAllowed(text[i])) return;
+
+        int step = e.Key == Key.Back ? -1 : 1;
+        while (i >= 0 && i < text.Length && !PhoneNumber.IsAllowed(text[i])) i += step;
+        if (i < 0 || i >= text.Length) return;
+
+        e.Handled = true;
+        var removed = text.Remove(i, 1);
+        var formatted = PhoneNumber.FormatAsYouType(removed);
+        int newCaret = PhoneNumber.MapCaret(removed, e.Key == Key.Back ? i : caret, formatted);
+        _formatting = true;
+        NumberBox.Text = formatted;
+        NumberBox.CaretIndex = newCaret;
+        _formatting = false;
+        Render();
+    }
 
     private static string Friendly(Exception ex) => ex switch
     {
@@ -788,6 +893,7 @@ public partial class MainWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        _bar.Close();
         _poll.Stop();
         _tick.Stop();
         _hook.Dispose();

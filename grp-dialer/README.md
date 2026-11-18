@@ -12,7 +12,20 @@ There is no taskbar button. To quit, right-click the tray icon > **Exit GRP
 Dialer** (or Settings > Advanced and help > Quit). On Windows 11 a new tray icon
 may start under the **^** arrow; drag it onto the taskbar to keep it visible.
 
-Type a number, press **Enter**. That's it.
+Type a number, press **Enter**. That's it. The box formats the number as you
+type, e.g. `(705) 555-1234`, and ignores letters; extensions and `*`/`#` codes
+stay as typed.
+
+### Call bar
+
+During any call a thin strip, the same width as the dialer, sits above the
+clock (or just above the dialer when it's open):
+
+- **Ringing:** green pulsing dot, the caller's number, **Answer** and **Decline**.
+- **Answered / outgoing:** orange dot, the call time underneath, **End**.
+
+It stays for the whole call, even when you click away, and never takes keyboard
+focus from the app you're in. Click the number to open the dialer.
 
 | Key | Phone idle | On a call |
 |---|---|---|
