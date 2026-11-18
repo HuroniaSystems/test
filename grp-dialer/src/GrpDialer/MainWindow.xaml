@@ -4,7 +4,8 @@
         Title="GRP Dialer"
         Width="364" SizeToContent="Height"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
-        ResizeMode="CanMinimize"
+        ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True"
+        WindowStartupLocation="Manual"
         FontFamily="{StaticResource UiFont}" FontSize="13"
         Foreground="{StaticResource Ink}"
         UseLayoutRounding="True"
@@ -22,8 +23,7 @@
             <DockPanel>
 
                 <!-- Header: title, connection status, settings / minimize / close -->
-                <Border x:Name="Header" DockPanel.Dock="Top" Background="{StaticResource Brand}" CornerRadius="11,11,0,0"
-                        MouseLeftButtonDown="Header_MouseLeftButtonDown">
+                <Border x:Name="Header" DockPanel.Dock="Top" Background="{StaticResource Brand}" CornerRadius="11,11,0,0">
                     <Grid Margin="16,9,8,9">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -41,10 +41,7 @@
                             <Button x:Name="SettingsBtn" Style="{StaticResource HeaderButton}" ToolTip="Settings" Click="Settings_Click">
                                 <TextBlock x:Name="SettingsGlyph" Style="{StaticResource Icon}" Text="&#xE713;" />
                             </Button>
-                            <Button Style="{StaticResource HeaderButton}" ToolTip="Minimize" Click="Minimize_Click">
-                                <TextBlock Style="{StaticResource Icon}" Text="&#xE921;" FontSize="11" />
-                            </Button>
-                            <Button Style="{StaticResource HeaderButton}" ToolTip="Close" Click="Close_Click">
+                            <Button x:Name="CloseBtn" Style="{StaticResource HeaderButton}" ToolTip="Hide (Esc). GRP Dialer keeps running in the tray." Click="Close_Click">
                                 <TextBlock Style="{StaticResource Icon}" Text="&#xE8BB;" FontSize="11" />
                             </Button>
                         </StackPanel>
@@ -242,8 +239,8 @@
                             <StackPanel>
                                 <TextBlock Text="Options" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,6" />
                                 <CheckBox x:Name="GlobalKeyCheck" Content="Numpad Enter opens the dialer from any app" />
-                                <CheckBox x:Name="PopCheck" Content="Bring to front when a call comes in" />
-                                <CheckBox x:Name="TopCheck" Content="Keep on top of other windows" />
+                                <CheckBox x:Name="PopCheck" Content="Open the dialer when a call comes in" />
+                                <CheckBox x:Name="ClickAwayCheck" Content="Hide when I click away" />
                                 <CheckBox x:Name="KeypadCheck" Content="Show keypad" />
                             </StackPanel>
                         </Border>
@@ -274,13 +271,20 @@
                                     <LineBreak />
                                     <Run FontWeight="SemiBold" Foreground="{StaticResource Ink}">Numpad Enter</Run> brings the dialer up from any app.
                                     <LineBreak />
-                                    <Run FontWeight="SemiBold" Foreground="{StaticResource Ink}">Esc</Run> clears the number.
+                                    <Run FontWeight="SemiBold" Foreground="{StaticResource Ink}">Esc</Run> clears the number, then hides the dialer.
+                                    <LineBreak />
+                                    The dialer lives in the tray by the clock: click its icon to open it, right-click to quit.
                                 </TextBlock>
 
                                 <TextBlock Style="{StaticResource Label}" Text="Phone setup (GRP26xx)" Margin="0,14,0,4" />
                                 <TextBlock Style="{StaticResource Hint}" LineHeight="18"
                                            Text="In the phone's web page, open Network › Remote Control. Turn on Action URI Support, add this PC's IP (or any) to the Allowed IP List, and turn off Remote Control Pop-up Window Support. On GRP260x also turn on Click-To-Dial (Phone Settings › Call Settings)." />
-                                <TextBlock x:Name="VersionText" Style="{StaticResource Hint}" Foreground="{StaticResource Faint}" Margin="0,12,0,0" />
+                                <Grid Margin="0,12,0,0">
+                                    <TextBlock x:Name="VersionText" Style="{StaticResource Hint}" Foreground="{StaticResource Faint}" VerticalAlignment="Center" />
+                                    <Button HorizontalAlignment="Right" Style="{StaticResource LinkButton}" Margin="0,0,-6,0"
+                                            Content="Quit GRP Dialer" Click="Quit_Click"
+                                            ToolTip="Stops the app. Also in the tray icon's right-click menu." />
+                                </Grid>
                             </StackPanel>
                         </Border>
 

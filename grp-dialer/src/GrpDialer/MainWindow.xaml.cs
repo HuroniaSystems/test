@@ -36,6 +36,16 @@ public partial class MainWindow : Window
     private bool _polling;
     private bool _busy;                  // a user command is in flight
     private Action? _msgAction;
+    private bool _wasCounting;           // queue countdown was showing last tick
+
+    // Tray flyout: anchored above the taskbar's notification area, like OTC Monitor.
+    private const double Shadow = 12;    // transparent margin that holds the drop shadow
+    private const double Gap = 8;        // visible gap between the card and the screen edge
+    private DateTime _hiddenAt = DateTime.MinValue;
+    private DateTime _deactivatedAt = DateTime.MinValue;
+
+    /// <summary>Set by App; mirrors the call status in the notification-area tooltip.</summary>
+    public TrayIcon? Tray { get; set; }
 
     public MainWindow()
     {
@@ -44,27 +54,20 @@ public partial class MainWindow : Window
         _hook = new NumpadEnterHook(() => IsActive);
         _hook.Pressed += () => Dispatcher.BeginInvoke(new Action(BringUp));
 
-        if (_settings.Left is double l && _settings.Top is double t &&
-            l >= SystemParameters.VirtualScreenLeft && t >= SystemParameters.VirtualScreenTop &&
-            l < SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth - 80 &&
-            t < SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight - 80)
+        // Flyout: no taskbar button, sits above the clock, keeps its bottom edge there as it grows.
+        SizeChanged += (_, _) => { if (IsVisible) Place(); };
+        SystemParameters.StaticPropertyChanged += (_, e) =>
         {
-            WindowStartupLocation = WindowStartupLocation.Manual;
-            Left = l;
-            Top = t;
-        }
-        else
+            if (e.PropertyName == nameof(SystemParameters.WorkArea) && IsVisible) Dispatcher.BeginInvoke(Place);
+        };
+        Deactivated += async (_, _) =>
         {
-            WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        }
-
-        // Never taller than the screen (the body scrolls instead), and keep the bottom edge on screen as it grows.
-        MaxHeight = SystemParameters.WorkArea.Height;
-        SizeChanged += (_, _) =>
-        {
-            var wa = SystemParameters.WorkArea;
-            if (WindowState == WindowState.Normal && Top + ActualHeight > wa.Bottom && Top > wa.Top)
-                Top = Math.Max(wa.Top, wa.Bottom - ActualHeight);
+            _deactivatedAt = DateTime.UtcNow;
+            if (!_settings.HideOnClickAway) return;
+            await Task.Delay(150);
+            // Our own tray menu or a message box taking focus doesn't count as clicking away.
+            if (!IsVisible || IsActive || WindowFocus.ForegroundIsOurProcess()) return;
+            HideFlyout();
         };
 
         var v = typeof(MainWindow).Assembly.GetName().Version;
@@ -84,15 +87,77 @@ public partial class MainWindow : Window
     public void BringUp()
     {
         if (SettingsView.Visibility == Visibility.Visible && _settings.IsConfigured) ShowSettings(false);
+        ShowFlyout();
+    }
+
+    // ================= Flyout =================
+
+    /// <summary>Bottom-right of the work area: just above the clock with the taskbar at the bottom.</summary>
+    private void Place()
+    {
+        var wa = SystemParameters.WorkArea;
+        MaxHeight = Math.Max(240, wa.Height - 2 * Gap + 2 * Shadow);
+        double h = ActualHeight;
+        if (h <= 0 && Content is FrameworkElement root)
+        {
+            root.Measure(new Size(Width, double.PositiveInfinity));
+            h = Math.Min(root.DesiredSize.Height, MaxHeight);
+        }
+        Left = wa.Right - Width + Shadow - Gap;
+        Top = Math.Max(wa.Top - Shadow, wa.Bottom - h + Shadow - Gap);
+    }
+
+    /// <param name="activate">false shows it without taking focus from what the user is doing.</param>
+    public void ShowFlyout(bool activate = true)
+    {
+        Place();
+        if (activate)
+        {
+            WindowFocus.ForceForeground(this);
+            FocusDialer();
+        }
+        else if (!IsVisible)
+        {
+            ShowActivated = false;
+            Show();
+            ShowActivated = true;
+        }
+    }
+
+    public void HideFlyout()
+    {
+        if (!IsVisible) return;
+        Hide();
+        _hiddenAt = DateTime.UtcNow;
+    }
+
+    /// <summary>Tray icon click: open, or close if it's open.</summary>
+    public void ToggleFlyout()
+    {
+        var now = DateTime.UtcNow;
+        if (IsVisible)
+        {
+            // Clicking the tray takes focus first, so "was just active" means the user is closing it.
+            if (IsActive || (now - _deactivatedAt).TotalMilliseconds < 500) HideFlyout();
+            else ShowFlyout();
+            return;
+        }
+        // The click that hid it (by taking focus) must not open it again.
+        if ((now - _hiddenAt).TotalMilliseconds < 500) return;
+        ShowFlyout();
+    }
+
+    public void OpenSettings()
+    {
+        if (SettingsView.Visibility != Visibility.Visible) ShowSettings(true);
+        Place();
         WindowFocus.ForceForeground(this);
-        FocusDialer();
     }
 
     // ================= Settings =================
 
     private void ApplySettings(bool openSettingsIfEmpty = false)
     {
-        Topmost = _settings.AlwaysOnTop;
         Keypad.Visibility = _settings.ShowKeypad ? Visibility.Visible : Visibility.Collapsed;
         KeypadBtnText.Text = _settings.ShowKeypad ? "Hide keypad" : "Keypad";
         _queue.Delay = TimeSpan.FromSeconds(_settings.QueueDelaySeconds);
@@ -144,7 +209,7 @@ public partial class MainWindow : Window
             HttpsCheck.IsChecked = _settings.UseHttps;
             GlobalKeyCheck.IsChecked = _settings.GlobalNumpadEnter;
             PopCheck.IsChecked = _settings.PopOnIncoming;
-            TopCheck.IsChecked = _settings.AlwaysOnTop;
+            ClickAwayCheck.IsChecked = _settings.HideOnClickAway;
             KeypadCheck.IsChecked = _settings.ShowKeypad;
             DelayBox.Text = _settings.QueueDelaySeconds.ToString();
             SetAdvanced(false);
@@ -177,7 +242,7 @@ public partial class MainWindow : Window
         _settings.UseHttps = HttpsCheck.IsChecked == true;
         _settings.GlobalNumpadEnter = GlobalKeyCheck.IsChecked == true;
         _settings.PopOnIncoming = PopCheck.IsChecked == true;
-        _settings.AlwaysOnTop = TopCheck.IsChecked == true;
+        _settings.HideOnClickAway = ClickAwayCheck.IsChecked == true;
         _settings.ShowKeypad = KeypadCheck.IsChecked == true;
         _settings.QueueDelaySeconds = delay;
         try { _settings.Save(); }
@@ -302,8 +367,7 @@ public partial class MainWindow : Window
             bool placedByUs = DateTime.Now - _lastDialAt < TimeSpan.FromSeconds(10);
             if (!placedByUs)
             {
-                if (_settings.PopOnIncoming) WindowFocus.ForceForeground(this);
-                else WindowFocus.Flash(this);
+                if (_settings.PopOnIncoming) ShowFlyout();
             }
         }
         if (!isBusy) _busySince = null;
@@ -318,11 +382,18 @@ public partial class MainWindow : Window
 
         if (_client is not null)
         {
+            // A half-typed number or open Settings holds the queue, but only while the user can see
+            // it: a hidden flyout must not stall the queue without saying why.
             bool hold = _busy
-                        || PhoneNumber.Normalize(NumberBox.Text).Length > 0
-                        || SettingsView.Visibility == Visibility.Visible;
+                        || IsVisible && (PhoneNumber.Normalize(NumberBox.Text).Length > 0
+                                         || SettingsView.Visibility == Visibility.Visible);
             var next = _queue.Tick(_status.Online, _status.Idle, hold, DateTime.Now);
             if (next is not null) _ = Dial(next, fromQueue: true);
+
+            // Countdown to the next queued call: show it (without taking focus) so it can be paused.
+            bool counting = _queue.DialAt is not null;
+            if (counting && !_wasCounting && !IsVisible) ShowFlyout(activate: false);
+            _wasCounting = counting;
         }
         RenderQueueStatus();
     }
@@ -412,6 +483,18 @@ public partial class MainWindow : Window
             : "Enter calls · Esc clears";
 
         RenderQueueStatus();
+        RenderTray(label, busy ? RemoteName.Text : "");
+    }
+
+    private void RenderTray(string label, string who)
+    {
+        if (Tray is null) return;
+        string text = _client is null ? "Not set up"
+            : !_status.Online ? (_connError.Length > 0 ? "Phone offline" : "Connecting")
+            : who.Length > 0 && who != "On a call" ? $"{label}: {who}"
+            : label;
+        if (_queue.Count > 0) text += $" · {_queue.Count} queued";
+        Tray.SetStatus(text, _client is not null && _status.Online);
     }
 
     private void SetConnection(bool? ok, string text, string? detail)
@@ -655,8 +738,13 @@ public partial class MainWindow : Window
                 break;
             case Key.Escape:
                 e.Handled = true;
-                NumberBox.Clear();
-                FocusDialer();
+                // Esc clears the box; on an empty box it closes the flyout.
+                if (NumberBox.Text.Length == 0) HideFlyout();
+                else
+                {
+                    NumberBox.Clear();
+                    FocusDialer();
+                }
                 break;
             default:
                 // Typing anywhere in the window goes to the dialer.
@@ -683,33 +771,27 @@ public partial class MainWindow : Window
 
     // ================= Window chrome =================
 
-    private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
-    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+    private void Close_Click(object sender, RoutedEventArgs e) => HideFlyout();
 
-    private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        if (e.ButtonState == MouseButtonState.Pressed) DragMove();
-    }
-
-    protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
-    {
-        base.OnMouseLeftButtonDown(e);
-        if (!e.Handled && e.ButtonState == MouseButtonState.Pressed && e.OriginalSource is Border or Grid or StackPanel)
-            DragMove();
-    }
+    private void Quit_Click(object sender, RoutedEventArgs e) => (Application.Current as App)?.ExitApp();
 
     protected override void OnClosing(CancelEventArgs e)
     {
-        if (WindowState == WindowState.Normal)
+        // Alt+F4 and the like just tuck it back into the tray; Exit is in the tray menu.
+        if (!((Application.Current as App)?.Exiting ?? true))
         {
-            _settings.Left = Left;
-            _settings.Top = Top;
-            TrySave();
+            e.Cancel = true;
+            HideFlyout();
         }
+        base.OnClosing(e);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
         _poll.Stop();
         _tick.Stop();
         _hook.Dispose();
         _client?.Dispose();
-        base.OnClosing(e);
+        base.OnClosed(e);
     }
 }

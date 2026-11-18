@@ -17,11 +17,10 @@ public sealed class Settings
     public string PasswordProtected { get; set; } = "";
     public bool GlobalNumpadEnter { get; set; } = true;
     public bool PopOnIncoming { get; set; } = true;
-    public bool AlwaysOnTop { get; set; }
+    /// <summary>Hide the flyout when another window is clicked, like the taskbar's own flyouts.</summary>
+    public bool HideOnClickAway { get; set; } = true;
     public bool ShowKeypad { get; set; }
     public int QueueDelaySeconds { get; set; } = 3;
-    public double? Left { get; set; }
-    public double? Top { get; set; }
 
     public static readonly string Dir =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GrpDialer");

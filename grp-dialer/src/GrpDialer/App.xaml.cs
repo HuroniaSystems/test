@@ -14,6 +14,7 @@ public partial class App : Application
     private Mutex? _single;
     private EventWaitHandle? _showSignal;
     private RegisteredWaitHandle? _showWait;
+    private TrayIcon? _tray;
     private DateTime _lastErrorBox = DateTime.MinValue;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -41,9 +42,29 @@ public partial class App : Application
         TaskScheduler.UnobservedTaskException += (_, ex) => { Log(ex.Exception); ex.SetObserved(); };
 
         base.OnStartup(e);
+
+        // Lives in the notification area like OTC Monitor: no taskbar button, the window is a
+        // flyout above the clock, and only Exit (tray menu or Settings) stops the app.
+        ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        SessionEnding += (_, _) => Exiting = true;
+
         var window = new MainWindow();
         MainWindow = window;
-        window.Show();
+        _tray = new TrayIcon();
+        _tray.Toggle += window.ToggleFlyout;
+        _tray.OpenSettings += window.OpenSettings;
+        _tray.Exit += ExitApp;
+        window.Tray = _tray;
+        window.ShowFlyout();
+    }
+
+    /// <summary>True once the user chose Exit (or Windows is signing out), so closing really closes.</summary>
+    public bool Exiting { get; private set; }
+
+    public void ExitApp()
+    {
+        Exiting = true;
+        Shutdown();
     }
 
     private void OnUiException(object sender, DispatcherUnhandledExceptionEventArgs e)
@@ -73,6 +94,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _tray?.Dispose();   // otherwise a dead icon lingers by the clock until hovered
         _showWait?.Unregister(null);
         _showSignal?.Dispose();
         _single?.Dispose();

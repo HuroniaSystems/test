@@ -5,13 +5,20 @@ CTI HTTP API: dial, answer, hang up, and queue the next calls.
 
 ## Using it
 
+GRP Dialer lives in the notification area (tray) by the clock, like OTC Monitor.
+Click its green phone icon to open the dialer just above the taskbar; it hides
+again when you click another app, press **Esc** on an empty box, or click ×.
+There is no taskbar button. To quit, right-click the tray icon > **Exit GRP
+Dialer** (or Settings > Advanced and help > Quit). On Windows 11 a new tray icon
+may start under the **^** arrow; drag it onto the taskbar to keep it visible.
+
 Type a number, press **Enter**. That's it.
 
 | Key | Phone idle | On a call |
 |---|---|---|
 | Enter, number typed | Calls it | Adds it to the queue |
 | Enter, box empty | Calls the next queued number | Answers if ringing, otherwise hangs up |
-| Esc | Clears the box | Clears the box |
+| Esc | Clears the box; hides the dialer if already empty | Same |
 | Numpad Enter (any app) | Brings the dialer up | Brings the dialer up |
 
 Main Enter is never hooked. Numpad Enter is only intercepted while another app
@@ -25,6 +32,7 @@ countdown (3 s, set in Settings > Advanced).
 
 - **Pause** stops the queue; **Resume** starts it again. **Clear** empties it; × removes one number.
 - The queue waits while a number is typed in the box, while Settings is open, and while the phone is offline.
+- If the dialer is hidden when the countdown starts, it pops up (without taking focus) so you can see it and pause.
 - An incoming call during the countdown cancels it; the queue continues after that call.
 - If the phone refuses a queued number, it goes back to the top and the queue pauses.
 - The queue lives in memory only: closing the app empties it, so nothing dials by surprise on the next start.

@@ -47,7 +47,13 @@ jobs:
           $notes = @"
           GRP Dialer for Windows 10/11. Controls a Grandstream GRP2634 over its CTI API: dial, answer, hang up.
 
-          What's new in 1.1:
+          What's new in 1.2:
+          - Lives in the tray by the clock, like OTC Monitor: no taskbar button. Click the tray icon to open the dialer above the taskbar; it hides when you click away (or press Esc / the X).
+          - A queued call about to dial pops the dialer up (without stealing focus) so you can pause it.
+          - Quit from the tray icon's right-click menu, or Settings > Advanced.
+          - Windows 11 may put the icon under the ^ arrow at first: drag it onto the taskbar to keep it in view.
+
+          New in 1.1:
           - Call queue: while on a call, type numbers and press Enter to line them up. When the call ends, the next one dials automatically after a short countdown. Pause, Resume, Clear, or remove single numbers.
           - New light design matching OTC Monitor: green header, white cards, Roboto.
           - Simpler screen: plain status words, keypad and technical details tucked into Settings.

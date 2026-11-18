@@ -12,7 +12,6 @@ namespace GrpDialer.Services;
 public static class WindowFocus
 {
     private const int SW_RESTORE = 9;
-    private const uint FLASHW_ALL = 3, FLASHW_TIMERNOFG = 12;
 
     public static void ForceForeground(Window window)
     {
@@ -38,24 +37,13 @@ public static class WindowFocus
         window.Activate();
     }
 
-    public static void Flash(Window window)
+    /// <summary>True when the focused window belongs to this app (its tray menu, a message box).</summary>
+    public static bool ForegroundIsOurProcess()
     {
-        var info = new FLASHWINFO
-        {
-            cbSize = (uint)Marshal.SizeOf<FLASHWINFO>(),
-            hwnd = new WindowInteropHelper(window).Handle,
-            dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG,
-            uCount = uint.MaxValue,
-        };
-        FlashWindowEx(ref info);
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct FLASHWINFO
-    {
-        public uint cbSize;
-        public IntPtr hwnd;
-        public uint dwFlags, uCount, dwTimeout;
+        var fg = GetForegroundWindow();
+        if (fg == IntPtr.Zero) return false;
+        GetWindowThreadProcessId(fg, out uint pid);
+        return pid == (uint)Environment.ProcessId;
     }
 
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
@@ -65,5 +53,5 @@ public static class WindowFocus
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    [DllImport("user32.dll")] private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 }

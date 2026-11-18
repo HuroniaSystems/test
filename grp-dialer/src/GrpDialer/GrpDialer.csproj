@@ -4,11 +4,12 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>GrpDialer</AssemblyName>
     <RootNamespace>GrpDialer</RootNamespace>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Product>GRP Dialer</Product>
     <Company>Huronia Systems</Company>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -17,6 +18,12 @@
   <ItemGroup>
     <!-- Roboto (Apache 2.0, see Fonts/LICENSE), same face as OTC Monitor -->
     <Resource Include="Fonts\*.ttf" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- WinForms is only used for the tray icon; keep its types out of the WPF code. -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
   </ItemGroup>
 
   <ItemGroup>
