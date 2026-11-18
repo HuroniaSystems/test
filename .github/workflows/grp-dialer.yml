@@ -47,7 +47,10 @@ jobs:
           $notes = @"
           GRP Dialer for Windows 10/11. Controls a Grandstream GRP2634 over its CTI API: dial, answer, hang up.
 
-          What's new in 1.3:
+          What's new in 1.4:
+          - Caller lookup in PropelRx: for incoming calls, a small caption under the number says "Potentially JANE DOE" when one patient has that phone number, or "Multiple linked profiles" when several do. Nothing is shown when there's no match. Turn it on in Settings > Caller lookup with the PropelRx server (e.g. svr1), the same one OTC Monitor uses. It signs in as the current Windows user; a different account can be set under Advanced.
+
+          New in 1.3:
           - Call bar: a thin strip the width of the dialer, above the clock, for every call. Ringing: green dot, number, Answer and Decline. Answered: orange dot, call time underneath, End. It stays up for the whole call, even when you click away, and never takes focus from what you're typing.
           - Number box formats as you type, e.g. (705) 555-1234, and ignores letters. Short extensions stay as typed.
           - Smaller placeholder text in the number box.

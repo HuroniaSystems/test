@@ -9,7 +9,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>GrpDialer</AssemblyName>
     <RootNamespace>GrpDialer</RootNamespace>
-    <Version>1.3.0</Version>
+    <Version>1.4.0</Version>
     <Product>GRP Dialer</Product>
     <Company>Huronia Systems</Company>
     <ApplicationManifest>app.manifest</ApplicationManifest>

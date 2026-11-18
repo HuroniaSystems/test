@@ -40,6 +40,14 @@ public partial class MainWindow : Window
     private DateTime? _activeSince;      // when the current call was answered / connected
     private readonly CallBar _bar = new();
 
+    // PropelRx caller lookup for calls this app didn't place.
+    private PropelLookup? _propel;
+    private bool _callIsOurs;            // the current call was dialed from here
+    private DateTime _idleSince = DateTime.MinValue;   // when the line last went idle
+    private string? _callerDigits;       // number being / been looked up for this call
+    private string? _callerCaption;      // "Potentially JANE DOE", "Multiple linked profiles", or null
+    private CancellationTokenSource? _lookupCts;
+
     // Tray flyout: anchored above the taskbar's notification area, like OTC Monitor.
     private const double Shadow = 12;    // transparent margin that holds the drop shadow
     private const double Gap = 8;        // visible gap between the card and the screen edge
@@ -126,6 +134,36 @@ public partial class MainWindow : Window
         RenderBar();
     }
 
+    // ================= Caller lookup =================
+
+    private async Task LookUpCaller(PropelLookup propel, string digits)
+    {
+        _lookupCts?.Cancel();
+        var cts = _lookupCts = new CancellationTokenSource();
+        _callerDigits = digits;
+        _callerCaption = null;
+        try
+        {
+            var matches = await propel.FindByPhone(digits, cts.Token);
+            if (cts.IsCancellationRequested || _callerDigits != digits) return;
+            _callerCaption = PropelLookup.Caption(matches);
+        }
+        catch
+        {
+            // PropelRx down or refusing: show nothing, the call itself is unaffected.
+            // (Settings > Test lookup explains what's wrong.)
+        }
+        Render();
+    }
+
+    private void ClearCaller()
+    {
+        _lookupCts?.Cancel();
+        _lookupCts = null;
+        _callerDigits = null;
+        _callerCaption = null;
+    }
+
     // ================= Call bar =================
 
     /// <summary>
@@ -152,6 +190,7 @@ public partial class MainWindow : Window
             : _activeSince is DateTime since ? (phase == CallPhase.OnHold ? "On hold · " : "") + Elapsed(DateTime.Now - since)
             : phase == CallPhase.Calling ? "Calling…"
             : null;
+        if (_callerCaption is not null) caption = caption is null ? _callerCaption : caption + " · " + _callerCaption;
         _bar.Update(who, s.RemoteName, ringing, caption, enabled: !_busy);
 
         // Position (measure first if it hasn't been shown yet).
@@ -243,6 +282,14 @@ public partial class MainWindow : Window
         _failures = 0;
         _connError = "";
         _activeSince = null;
+        ClearCaller();
+        _propel?.Dispose();
+        _propel = null;
+        if (_settings.LookupEnabled)
+        {
+            try { _propel = new PropelLookup(_settings.PropelAddress, _settings.PropelUser, _settings.PropelPassword); }
+            catch { /* bad address: lookup stays off; Test lookup in Settings says why */ }
+        }
 
         if (_client is null)
         {
@@ -277,6 +324,10 @@ public partial class MainWindow : Window
             HttpsCheck.IsChecked = _settings.UseHttps;
             GlobalKeyCheck.IsChecked = _settings.GlobalNumpadEnter;
             ClickAwayCheck.IsChecked = _settings.HideOnClickAway;
+            PropelBox.Text = _settings.PropelAddress;
+            PropelUserBox.Text = _settings.PropelUser;
+            PropelPasswordBox.Password = _settings.PropelPassword;
+            SetPropelResult(null, "");
             KeypadCheck.IsChecked = _settings.ShowKeypad;
             DelayBox.Text = _settings.QueueDelaySeconds.ToString();
             SetAdvanced(false);
@@ -297,6 +348,11 @@ public partial class MainWindow : Window
     {
         var host = HostBox.Text.Trim();
         if (host.Length == 0) { SettingsError("Enter the phone's address."); return; }
+        if (PropelBox.Text.Trim().Length > 0 && PropelLookup.BaseUrl(PropelBox.Text) is null)
+        {
+            SettingsError("That PropelRx server address isn't valid (for example svr1 or 192.168.1.10).");
+            return;
+        }
         if (!int.TryParse(DelayBox.Text.Trim(), out var delay) || delay < 0 || delay > 60)
         {
             SetAdvanced(true);
@@ -309,6 +365,9 @@ public partial class MainWindow : Window
         _settings.UseHttps = HttpsCheck.IsChecked == true;
         _settings.GlobalNumpadEnter = GlobalKeyCheck.IsChecked == true;
         _settings.HideOnClickAway = ClickAwayCheck.IsChecked == true;
+        _settings.PropelAddress = PropelBox.Text.Trim();
+        _settings.PropelUser = PropelUserBox.Text.Trim();
+        _settings.PropelPassword = PropelPasswordBox.Password;
         _settings.ShowKeypad = KeypadCheck.IsChecked == true;
         _settings.QueueDelaySeconds = delay;
         try { _settings.Save(); }
@@ -345,6 +404,41 @@ public partial class MainWindow : Window
         {
             TestBtn.IsEnabled = true;
         }
+    }
+
+    private async void PropelTest_Click(object sender, RoutedEventArgs e)
+    {
+        if (PropelBox.Text.Trim().Length == 0) { SetPropelResult(false, "Enter the PropelRx server."); return; }
+        PropelTestBtn.IsEnabled = false;
+        SetPropelResult(null, "Testing…");
+        try
+        {
+            using var test = new PropelLookup(PropelBox.Text, PropelUserBox.Text, PropelPasswordBox.Password);
+            await test.Test();
+            SetPropelResult(true, "Connected");
+        }
+        catch (Exception ex)
+        {
+            SetPropelResult(false, ex is FormatException or HttpRequestException { StatusCode: not null } ? ex.Message : Friendly(ex) switch
+            {
+                "Can't reach the phone." => "Can't reach PropelRx.",
+                "The phone didn't respond." => "PropelRx didn't respond.",
+                "That phone address isn't valid." => "That address isn't valid.",
+                var other => other,
+            });
+        }
+        finally
+        {
+            PropelTestBtn.IsEnabled = true;
+        }
+    }
+
+    private void SetPropelResult(bool? ok, string text)
+    {
+        PropelTestText.Text = text;
+        PropelTestText.Foreground = Res(ok == false ? "DangerInk" : ok == true ? "OkInk" : "Muted");
+        PropelTestDot.Visibility = ok is null ? Visibility.Collapsed : Visibility.Visible;
+        PropelTestDot.Fill = Res(ok == true ? "OkEdge" : "Danger");
     }
 
     private void SetTestResult(bool? ok, string text)
@@ -421,8 +515,20 @@ public partial class MainWindow : Window
 
     private void UpdateStatus(LineStatus s)
     {
+        bool wasBusy = _status.Online && !_status.Idle;
         bool isBusy = s.Online && !s.Idle;
         _status = s;
+
+        // Caller lookup: only for calls this app didn't dial (incoming, or the handset). A call is
+        // ours if we dialed since the line last went idle; a ringing inbound call never is.
+        if (!isBusy && (wasBusy || _idleSince == DateTime.MinValue)) _idleSince = DateTime.Now;
+        if (isBusy && !wasBusy)
+            _callIsOurs = _lastDialAt >= _idleSince && DateTime.Now - _lastDialAt < TimeSpan.FromSeconds(10);
+        if (isBusy && CallPhases.From(s) == CallPhase.Incoming) _callIsOurs = false;
+        if (!isBusy) ClearCaller();
+        else if (!_callIsOurs && _propel is not null
+                 && PropelLookup.SearchDigits(s.RemoteNumber) is string digits && digits != _callerDigits)
+            _ = LookUpCaller(_propel, digits);
 
         // Incoming calls show on the call bar (see RenderBar) instead of popping the whole dialer.
         // Call time (bar and dialer) counts from the answer, not from the first ring.
@@ -519,6 +625,8 @@ public partial class MainWindow : Window
             RemoteNumber.Text = "";
         }
         RemoteNumber.Visibility = RemoteNumber.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        CallerText.Text = busy ? _callerCaption ?? "" : "";
+        CallerText.Visibility = CallerText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
         // Entry
         NumberBox.Tag = busy ? "Type a number to queue it" : "Type a number";
@@ -894,6 +1002,8 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _bar.Close();
+        _lookupCts?.Cancel();
+        _propel?.Dispose();
         _poll.Stop();
         _tick.Stop();
         _hook.Dispose();

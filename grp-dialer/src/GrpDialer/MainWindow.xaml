@@ -68,6 +68,10 @@
                                            FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                                 <TextBlock x:Name="RemoteNumber" Margin="0,2,0,0" FontSize="14" Visibility="Collapsed"
                                            Foreground="{StaticResource Muted}" />
+                                <!-- PropelRx caller lookup: "Potentially JANE DOE" / "Multiple linked profiles" -->
+                                <TextBlock x:Name="CallerText" Margin="0,3,0,0" FontSize="11.5" Visibility="Collapsed"
+                                           Foreground="{StaticResource Faint}" TextTrimming="CharacterEllipsis"
+                                           ToolTip="From PropelRx patient phone numbers" />
                             </StackPanel>
                         </Border>
 
@@ -237,6 +241,27 @@
 
                         <Border Style="{StaticResource CardBox}" Margin="0,12,0,0">
                             <StackPanel>
+                                <TextBlock Text="Caller lookup" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,2" />
+                                <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,0,0,10"
+                                           Text="Shows who might be calling, from PropelRx patient phone numbers." />
+                                <TextBlock Style="{StaticResource Label}" Text="PropelRx server" />
+                                <TextBox x:Name="PropelBox" Tag="e.g. svr1 · leave blank to turn off" />
+                                <Grid Margin="0,12,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="PropelTestBtn" Content="Test lookup" Click="PropelTest_Click" />
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,0,0" VerticalAlignment="Center">
+                                        <Ellipse x:Name="PropelTestDot" Width="8" Height="8" Margin="0,0,6,0" Visibility="Collapsed" />
+                                        <TextBlock x:Name="PropelTestText" FontSize="12" TextWrapping="Wrap" MaxWidth="170" />
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource CardBox}" Margin="0,12,0,0">
+                            <StackPanel>
                                 <TextBlock Text="Options" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,6" />
                                 <CheckBox x:Name="GlobalKeyCheck" Content="Numpad Enter opens the dialer from any app" />
                                 <CheckBox x:Name="ClickAwayCheck" Content="Hide when I click away" />
@@ -263,6 +288,12 @@
                                     <TextBlock Text="Seconds before the next queued call" VerticalAlignment="Center" TextWrapping="Wrap" />
                                     <TextBox x:Name="DelayBox" Grid.Column="1" Width="56" HorizontalContentAlignment="Center" />
                                 </Grid>
+
+                                <TextBlock Style="{StaticResource Label}" Text="PropelRx Windows account" Margin="0,14,0,2" />
+                                <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,0,0,6"
+                                           Text="Only if PropelRx asks for a sign-in. Blank uses this Windows user." />
+                                <TextBox x:Name="PropelUserBox" Tag="DOMAIN\username" />
+                                <PasswordBox x:Name="PropelPasswordBox" Margin="0,6,0,0" />
 
                                 <TextBlock Style="{StaticResource Label}" Text="Keys" Margin="0,14,0,4" />
                                 <TextBlock Style="{StaticResource Hint}" LineHeight="18">

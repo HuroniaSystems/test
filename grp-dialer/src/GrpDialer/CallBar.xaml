@@ -25,21 +25,25 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
 
                 <!-- Number (click opens the dialer) -->
-                <StackPanel x:Name="Who" VerticalAlignment="Center" Background="Transparent" Cursor="Hand"
-                            MouseLeftButtonUp="Who_Click">
-                    <StackPanel Orientation="Horizontal">
-                        <Ellipse x:Name="Dot" Width="9" Height="9" VerticalAlignment="Center" Margin="0,1,9,0"
-                                 Fill="{StaticResource RingDot}" />
-                        <TextBlock x:Name="NumberText" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
-                                   VerticalAlignment="Center" Text="(705) 555-1234" />
-                    </StackPanel>
-                    <TextBlock x:Name="Caption" FontSize="11.5" Foreground="{StaticResource Muted}" Margin="18,1,0,0"
-                               Visibility="Collapsed" />
+                <StackPanel x:Name="Who" Orientation="Horizontal" VerticalAlignment="Center" Background="Transparent"
+                            Cursor="Hand" MouseLeftButtonUp="Who_Click">
+                    <Ellipse x:Name="Dot" Width="9" Height="9" VerticalAlignment="Center" Margin="0,1,9,0"
+                             Fill="{StaticResource RingDot}" />
+                    <TextBlock x:Name="NumberText" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" Text="(705) 555-1234" />
                 </StackPanel>
 
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0">
+                <!-- Call time and/or PropelRx match. Runs under the buttons while ringing so the name fits. -->
+                <TextBlock x:Name="Caption" Grid.Row="1" FontSize="11.5" Foreground="{StaticResource Muted}" Margin="18,1,0,0"
+                           TextTrimming="CharacterEllipsis" Visibility="Collapsed" />
+
+                <StackPanel x:Name="Buttons" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0">
                     <Button x:Name="AnswerBtn" Style="{StaticResource PrimaryButton}" Height="32" Padding="11,0"
                             Click="Answer_Click" ToolTip="Answer">
                         <StackPanel Orientation="Horizontal">

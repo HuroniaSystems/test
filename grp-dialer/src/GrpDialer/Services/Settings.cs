@@ -20,6 +20,11 @@ public sealed class Settings
     public bool HideOnClickAway { get; set; } = true;
     public bool ShowKeypad { get; set; }
     public int QueueDelaySeconds { get; set; } = 3;
+    /// <summary>PropelRx server for caller lookup (e.g. svr1); blank turns lookup off.</summary>
+    public string PropelAddress { get; set; } = "";
+    /// <summary>Windows account for PropelRx, only if this Windows user can't open it.</summary>
+    public string PropelUser { get; set; } = "";
+    public string PropelPasswordProtected { get; set; } = "";
 
     public static readonly string Dir =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GrpDialer");
@@ -29,24 +34,34 @@ public sealed class Settings
     [JsonIgnore]
     public string Password
     {
-        get
+        get => Unprotect(PasswordProtected);
+        set => PasswordProtected = Protect(value);
+    }
+
+    [JsonIgnore]
+    public string PropelPassword
+    {
+        get => Unprotect(PropelPasswordProtected);
+        set => PropelPasswordProtected = Protect(value);
+    }
+
+    [JsonIgnore]
+    public bool LookupEnabled => !string.IsNullOrWhiteSpace(PropelAddress);
+
+    private static string Protect(string value) =>
+        string.IsNullOrEmpty(value)
+            ? ""
+            : Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(value), null, DataProtectionScope.CurrentUser));
+
+    private static string Unprotect(string stored)
+    {
+        if (string.IsNullOrEmpty(stored)) return "";
+        try
         {
-            if (string.IsNullOrEmpty(PasswordProtected)) return "";
-            try
-            {
-                var bytes = ProtectedData.Unprotect(Convert.FromBase64String(PasswordProtected), null,
-                    DataProtectionScope.CurrentUser);
-                return Encoding.UTF8.GetString(bytes);
-            }
-            catch { return ""; }
+            return Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(stored), null,
+                DataProtectionScope.CurrentUser));
         }
-        set
-        {
-            PasswordProtected = string.IsNullOrEmpty(value)
-                ? ""
-                : Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(value), null,
-                    DataProtectionScope.CurrentUser));
-        }
+        catch { return ""; }
     }
 
     [JsonIgnore]

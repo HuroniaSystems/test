@@ -55,6 +55,11 @@ public partial class CallBar : Window
             AnswerBtn.Visibility = ringing ? Visibility.Visible : Visibility.Collapsed;
             DeclineText.Text = ringing ? "Decline" : "End";
             DeclineBtn.ToolTip = ringing ? "Decline the call" : "Hang up";
+            // Ringing: two buttons, so the caption takes the full width underneath.
+            // Active: one small End button centred beside both lines.
+            System.Windows.Controls.Grid.SetColumnSpan(Caption, ringing ? 2 : 1);
+            System.Windows.Controls.Grid.SetRowSpan(Buttons, ringing ? 1 : 2);
+            Caption.Margin = new Thickness(18, ringing ? 4 : 1, 0, 0);
         }
 
         Caption.Text = caption ?? "";

@@ -27,6 +27,31 @@ clock (or just above the dialer when it's open):
 It stays for the whole call, even when you click away, and never takes keyboard
 focus from the app you're in. Click the number to open the dialer.
 
+### Caller lookup (PropelRx)
+
+For calls that weren't dialed from GRP Dialer, the caller's number is looked up
+in PropelRx, the same read-only web API OTC Monitor uses. A small muted caption
+appears under the number on the call bar and in the dialer:
+
+- one patient with that phone: **Potentially JANE DOE**
+- several: **Multiple linked profiles**
+- none (or PropelRx unreachable): nothing
+
+Set it up in Settings > **Caller lookup**: enter the PropelRx server (e.g.
+`svr1`, or a full URL) and use **Test lookup**. Requests sign in as the current
+Windows user, like a browser on the network; if PropelRx refuses, set a Windows
+account under Advanced (password stored with DPAPI). Only 10-digit North
+American numbers are looked up. Results are kept in memory for the current call
+and never written to disk.
+
+```
+GET http://<server>/PFSP/HTML/api/v1/SearchPatient?LastName=&FirstName=&ProvincialHealthNumber=&PhoneNumber=7055551234&GroupName=&Address=&BirthDate=&_=
+```
+
+The plain digits are tried first, then `(705) 555-1234` and `705-555-1234`.
+Records whose phone matches are used; if none show the number but PropelRx
+returned three or fewer, those are trusted (it matched another phone field).
+
 | Key | Phone idle | On a call |
 |---|---|---|
 | Enter, number typed | Calls it | Adds it to the queue |
